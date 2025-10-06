@@ -45,7 +45,8 @@ def build_sample_entityset() -> ft.EntitySet:
         }
     )
 
-    es = ft.EntitySet(name="customer_data")
+    es = ft.EntitySet(id="customer_data")
+
     es = es.add_dataframe(dataframe_name="customers", dataframe=customers_df, index="customer_id")
     es = es.add_dataframe(dataframe_name="sessions", dataframe=sessions_df, index="session_id")
     es = es.add_dataframe(
