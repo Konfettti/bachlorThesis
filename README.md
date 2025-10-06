@@ -56,9 +56,12 @@ The initial goal is to set up a local Python environment with [Featuretools](htt
    python examples/featuretools_demo.py
    python examples/tabpfn_demo.py
    python examples/featuretools_tabpfn_pipeline_demo.py
+   python examples/relbench_small_pipeline.py  # downloads ~100MB on first run
    ```
 
-   The Featuretools script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. The TabPFN script trains the probabilistic model on the classic Iris dataset and prints accuracy and a classification report. The combined pipeline example showcases how Featuretools-generated features can feed directly into a TabPFN classifier. If the scripts run successfully, the core tooling for the thesis is set up and ready for experimentation.
+The Featuretools script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. The TabPFN script trains the probabilistic model on the classic Iris dataset and prints accuracy and a classification report. The combined pipeline example showcases how Featuretools-generated features can feed directly into a TabPFN classifier. If the scripts run successfully, the core tooling for the thesis is set up and ready for experimentation.
+
+The RelBench demo downloads the small `rel-event` dataset (roughly 100 MB on the first run), engineers a handful of lightweight user-centric features, and evaluates a random forest baseline on the `user-attendance` regression task. You can customise the run via CLI flags, e.g. `--max-rows 2000` to keep the experiment light-weight or `--n-estimators 500` to strengthen the baseline.
 
 ## Next steps
 
