@@ -21,12 +21,27 @@ The initial goal is to set up a local Python environment with [Featuretools](htt
 
 ## Getting started
 
-1. **Create and activate a virtual environment** (shown with the built-in `venv` module):
+1. **Create and activate a virtual environment**. Below is an example using `conda`, followed by the original `venv` instructions.
+
+   <details>
+   <summary>Using conda</summary>
+
+   ```bash
+   conda create -n tabpfn-featuretools python=3.9
+   conda activate tabpfn-featuretools
+   ```
+
+   </details>
+
+   <details>
+   <summary>Using the built-in <code>venv</code> module</summary>
 
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate  # On Windows use `.venv\Scripts\activate`
    ```
+
+   </details>
 
 2. **Install the dependencies**:
 
@@ -40,9 +55,10 @@ The initial goal is to set up a local Python environment with [Featuretools](htt
    ```bash
    python examples/featuretools_demo.py
    python examples/tabpfn_demo.py
+   python examples/featuretools_tabpfn_pipeline_demo.py
    ```
 
-   The Featuretools script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. The TabPFN script trains the probabilistic model on the classic Iris dataset and prints accuracy and a classification report. If both scripts run successfully, the core tooling for the thesis is set up and ready for experimentation.
+   The Featuretools script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. The TabPFN script trains the probabilistic model on the classic Iris dataset and prints accuracy and a classification report. The combined pipeline example showcases how Featuretools-generated features can feed directly into a TabPFN classifier. If the scripts run successfully, the core tooling for the thesis is set up and ready for experimentation.
 
 ## Next steps
 
