@@ -12,7 +12,6 @@ from sklearn.utils.validation import check_is_fitted
 
 import featuretools as ft
 
-
 DataFrameDict = Mapping[str, pd.DataFrame]
 EntitySetBuilder = Callable[[DataFrameDict], ft.EntitySet]
 
@@ -20,7 +19,6 @@ EntitySetBuilder = Callable[[DataFrameDict], ft.EntitySet]
 @dataclass
 class FeaturetoolsTabPFNConfig:
     """Configuration describing how to run Deep Feature Synthesis."""
-
     target_dataframe_name: str
     agg_primitives: Optional[List[str]] = None
     trans_primitives: Optional[List[str]] = None
