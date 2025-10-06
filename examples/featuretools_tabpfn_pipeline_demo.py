@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Mapping
-import sys
 
 import numpy as np
 import pandas as pd
@@ -14,12 +12,7 @@ from sklearn.pipeline import Pipeline
 
 from tabpfn import TabPFNClassifier
 
-# Ensure the repository root (which houses ``featuretools_tabpfn_adapter``) is importable
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from featuretools_tabpfn_adapter import (  # noqa: E402  (import after sys.path mutation)
+from featuretools_tabpfn_adapter import (
     FeaturetoolsTabPFNAdapter,
     FeaturetoolsTabPFNConfig,
 )
