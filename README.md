@@ -35,13 +35,14 @@ The initial goal is to set up a local Python environment with [Featuretools](htt
    pip install -r requirements.txt
    ```
 
-3. **Run the demo script** to verify that Featuretools is installed and working:
+3. **Run the demo scripts** to verify that the tooling is installed and working:
 
    ```bash
    python examples/featuretools_demo.py
+   python examples/tabpfn_demo.py
    ```
 
-   The script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. If you see the resulting dataframe in your terminal, Featuretools is set up correctly and ready for use in subsequent experiments.
+   The Featuretools script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. The TabPFN script trains the probabilistic model on the classic Iris dataset and prints accuracy and a classification report. If both scripts run successfully, the core tooling for the thesis is set up and ready for experimentation.
 
 ## Next steps
 
