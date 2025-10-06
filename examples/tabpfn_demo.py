@@ -22,9 +22,9 @@ def main() -> None:
     )
 
     model = TabPFNClassifier(
-        device="cpu",
-        N_ensemble_configurations=32,
-    )
+    device="cpu",
+   )
+
 
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
