@@ -165,7 +165,7 @@ def prepare_observation_dataframe(
     target_col: str,
     entity_col: str,
     max_rows: Optional[int],
-) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
+) -> Tuple[pd.DataFrame, pd.Series]:
     """Prepare the task table as a Featuretools target dataframe."""
 
     df = table.df.copy()
@@ -187,10 +187,10 @@ def prepare_observation_dataframe(
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
 
     if target_col in df.columns:
-        y: Optional[pd.Series] = df[target_col].copy()
+        y = df[target_col].copy()
         obs_df = df.drop(columns=[target_col])
     else:
-        y = None
+        y = pd.Series(index=df.index, dtype="float32", name=target_col)
         obs_df = df
     if "index" in obs_df.columns:
         obs_df = obs_df.drop(columns=["index"])
@@ -290,7 +290,7 @@ def main() -> None:
     base_dataframes, specs = prepare_base_tables(dataset, args.max_base_rows)
 
     print("Preparing task splits ...")
-    splits: Dict[str, Tuple[pd.DataFrame, Optional[pd.Series]]] = {}
+    splits: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
     for split_name in ("train", "val", "test"):
         try:
             table = task.get_table(split_name)
@@ -326,8 +326,6 @@ def main() -> None:
     adapter = FeaturetoolsTabPFNAdapter(entityset_builder=builder, config=cfg)
 
     train_obs, y_train_series = splits["train"]
-    if y_train_series is None:
-        raise RuntimeError("Training targets are missing; cannot fit TabPFN model.")
     train_map = dict(base_dataframes)
     train_map["observations"] = train_obs
 
@@ -353,13 +351,8 @@ def main() -> None:
         X_split = np.nan_to_num(X_split, nan=0.0, posinf=0.0, neginf=0.0)
 
         if task.task_type == TaskType.REGRESSION:
-            if y_series is None:
-                print(
-                    f"[{split_name}] No targets provided for this split; skipping evaluation (RelBench often hides test labels)."
-                )
-                continue
             if y_series.isna().all():
-                print(f"[{split_name}] Targets are entirely missing after preprocessing; skipping evaluation.")
+                print(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
             y_true = y_series.to_numpy(dtype=np.float32)
             y_pred = model.predict(X_split)
@@ -367,13 +360,8 @@ def main() -> None:
         else:
             if encoder is None:
                 raise AssertionError("Encoder must be fitted for classification tasks.")
-            if y_series is None:
-                print(
-                    f"[{split_name}] No targets provided for this split; skipping evaluation (RelBench often hides test labels)."
-                )
-                continue
             if y_series.isna().all():
-                print(f"[{split_name}] Targets are entirely missing after preprocessing; skipping evaluation.")
+                print(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
             y_true = encoder.transform(y_series)
             y_pred = model.predict(X_split)
