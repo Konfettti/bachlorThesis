@@ -1,4 +1,4 @@
-# Automated Feature Synthesis for Relational Databases and Evaluation with TabPFN
+﻿# Automated Feature Synthesis for Relational Databases and Evaluation with TabPFN
 
 This repository contains the working environment for my bachelor thesis **"Automated Feature Synthesis for Relational Databases and Evaluation with TabPFN"**.
 
@@ -8,15 +8,15 @@ The initial goal is to set up a local Python environment with [Featuretools](htt
 
 ```
 .
-├── README.md                  # Project overview and usage instructions
-├── requirements.txt           # Python dependencies to reproduce the environment
-└── examples/
-    └── featuretools_demo.py   # Minimal script showing Featuretools in action
+â”œâ”€â”€ README.md                  # Project overview and usage instructions
+â”œâ”€â”€ requirements.txt           # Python dependencies to reproduce the environment
+â””â”€â”€ examples/
+    â””â”€â”€ featuretools_demo.py   # Minimal script showing Featuretools in action
 ```
 
 ## Prerequisites
 
-- Python 3.9 or later (Featuretools currently supports Python 3.9 – 3.12).
+- Python 3.9 or later (Featuretools currently supports Python 3.9 â€“ 3.12).
 - A virtual environment tool such as `venv`, `conda`, or `poetry`.
 
 ## Getting started
@@ -53,10 +53,10 @@ The initial goal is to set up a local Python environment with [Featuretools](htt
 3. **Run the demo scripts** to verify that the tooling is installed and working:
 
    ```bash
-   python examples/featuretools_demo.py
-   python examples/tabpfn_demo.py
-   python examples/featuretools_tabpfn_pipeline_demo.py
-   python examples/relbench_small_pipeline.py  # downloads ~100MB on first run
+   python -m bachlorThesis.examples.featuretools_demo
+   python -m bachlorThesis.examples.tabpfn_demo
+   python -m bachlorThesis.examples.featuretools_tabpfn_pipeline_demo
+   python -m bachlorThesis.examples.relbench_small_pipeline  # downloads ~100MB on first run
    ```
 
 The Featuretools script builds a small relational dataset, performs Deep Feature Synthesis (DFS), and prints the generated feature matrix along with a few synthesised features. The TabPFN script trains the probabilistic model on the classic Iris dataset and prints accuracy and a classification report. The combined pipeline example showcases how Featuretools-generated features can feed directly into a TabPFN classifier. If the scripts run successfully, the core tooling for the thesis is set up and ready for experimentation.
@@ -78,3 +78,4 @@ pip install featuretools
 ```
 
 For more detailed instructions and additional configuration options, consult the [official Featuretools documentation](https://featuretools.alteryx.com/en/stable/).
+
