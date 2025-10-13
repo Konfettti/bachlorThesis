@@ -26,11 +26,27 @@ class PreparedSplits:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a lightweight RelBench experiment.")
     parser.add_argument("--dataset", default="rel-event", help="RelBench dataset (e.g. rel-fin, rel-movies)")
-    parser.add_argument("--preset", default="small", help="Dataset preset name to try as a suffix (e.g., small -> rel-fin-small)")
+    parser.add_argument(
+        "--preset",
+        default="small",
+        help=(
+            "Dataset preset name treated as a suffix (e.g., small -> rel-fin-small). "
+            "Use 'none' to skip suffix handling when no preset artefact exists."
+        ),
+    )
     parser.add_argument("--task", default="user-attendance", help="Task name (default: user-attendance for rel-event)")
     parser.add_argument("--max-rows", type=int, default=5000, help="Limit rows per split for speed")
     parser.add_argument("--n-estimators", type=int, default=200, help="Number of trees in the random forest")
     return parser.parse_args()
+
+
+def _normalized_preset(preset: str | None) -> Optional[str]:
+    if not preset:
+        return None
+    normalized = preset.strip().lower()
+    if normalized in {"", "base", "default", "none"}:
+        return None
+    return normalized
 
 
 def _load_dataset_relbench_110(dataset_name: str, preset: str):
@@ -41,13 +57,19 @@ def _load_dataset_relbench_110(dataset_name: str, preset: str):
       2) Fall back to base name: '{dataset_name}'
     """
     # 1) Try hyphenated variant
-    hyphenated = f"{dataset_name}-{preset}" if preset else dataset_name
+    normalized = _normalized_preset(preset)
+    hyphenated = f"{dataset_name}-{normalized}" if normalized else dataset_name
     if hyphenated != dataset_name:
         try:
             print(f"Trying dataset alias: '{hyphenated}' ...")
             return get_dataset(hyphenated, download=True)
         except Exception as e:
             print(f"   • Alias '{hyphenated}' not available ({e}). Falling back to '{dataset_name}'.")
+            if normalized:
+                print(
+                    "   • Hint: This RelBench release may only ship the full dataset. "
+                    "Use --max-base-rows/--max-observations flags to downsample for quicker runs."
+                )
 
     # 2) Fallback to base dataset name
     print(f"Loading base dataset name: '{dataset_name}' ...")
@@ -56,7 +78,12 @@ def _load_dataset_relbench_110(dataset_name: str, preset: str):
 
 def load_task_or_dataset(dataset_name: str, preset: str, task_name: Optional[str]) -> BaseTask | object:
     """Try to load a RelBench task or fallback to raw dataset (relbench 1.1.0 compatible)."""
-    print(f"Loading dataset '{dataset_name}' (preset='{preset}' is treated as a name suffix in 1.1.0) ...")
+    preset_note = (
+        "treated as a name suffix; use --preset none to skip aliasing"
+        if _normalized_preset(preset)
+        else "loaded directly"
+    )
+    print(f"Loading dataset '{dataset_name}' (preset='{preset}' is {preset_note}) ...")
 
     dataset = _load_dataset_relbench_110(dataset_name, preset)
 
