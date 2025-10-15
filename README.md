@@ -79,3 +79,7 @@ pip install featuretools
 
 For more detailed instructions and additional configuration options, consult the [official Featuretools documentation](https://featuretools.alteryx.com/en/stable/).
 
+
+
+python -m bachlorThesis.examples.featuretools_tabpfn_relbench_pipeline --dataset rel-event --preset small --task user-attendance --max-base-rows 2000 --max-observations 200 --n-estimators 2 --max-depth 1
+
