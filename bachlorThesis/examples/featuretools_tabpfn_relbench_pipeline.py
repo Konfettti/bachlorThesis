@@ -1,4 +1,47 @@
-"""End-to-end pipeline that combines Featuretools DFS with TabPFN on RelBench tasks."""
+"""End-to-end pipeline that combines Featuretools DFS with multiple models on RelBench tasks.
+
+Command-line arguments
+======================
+
+``--dataset``
+    RelBench dataset name (e.g. ``rel-event``, ``rel-fin``).
+
+``--preset``
+    Dataset preset treated as suffix for RelBench 1.1 compatibility (e.g. ``rel-event-small``).
+
+``--task``
+    RelBench task name used to obtain targets.
+
+``--agg-primitives``
+    Aggregation primitives passed to Featuretools Deep Feature Synthesis (DFS).
+
+``--trans-primitives``
+    Transform primitives passed to Featuretools DFS.
+
+``--max-depth``
+    Maximum depth for DFS feature generation.
+
+``--max-base-rows``
+    Trim relational tables to at most this many rows for quicker experiments.
+
+``--max-observations``
+    Limit number of task observations per split (useful for quick runs).
+
+``--model``
+    Model backend used after feature generation. Choose between ``tabpfn`` (default),
+    ``xgboost`` or ``lightgbm``.
+
+``--n-estimators``
+    Number of estimators used by the selected model. For ``tabpfn`` this controls the
+    ensemble size, while for ``xgboost`` and ``lightgbm`` it maps to the number of boosting
+    rounds.
+
+``--device``
+    Torch device used for TabPFN (ignored for the gradient boosting models).
+
+``--verbose``
+    Enable verbose Featuretools output during DFS.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +64,18 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+try:  # Optional dependency: xgboost
+    from xgboost import XGBClassifier, XGBRegressor
+except Exception:  # pragma: no cover - optional dependency may be missing
+    XGBClassifier = None
+    XGBRegressor = None
+
+try:  # Optional dependency: lightgbm
+    from lightgbm import LGBMClassifier, LGBMRegressor
+except Exception:  # pragma: no cover - optional dependency may be missing
+    LGBMClassifier = None
+    LGBMRegressor = None
 
 from relbench.base import TaskType
 from relbench.base.database import Database
@@ -49,7 +104,7 @@ class TableSpec:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate relational features with Featuretools and train TabPFN on RelBench tasks.",
+        description="Generate relational features with Featuretools and train a model on RelBench tasks.",
     )
     parser.add_argument("--dataset", default="rel-event", help="RelBench dataset name (e.g. rel-event, rel-fin)")
     parser.add_argument(
@@ -87,8 +142,23 @@ def parse_args() -> argparse.Namespace:
         default=5000,
         help="Limit number of task observations per split (useful for quick runs).",
     )
-    parser.add_argument("--n-estimators", type=int, default=32, help="Number of estimators for TabPFN ensemble.")
-    parser.add_argument("--device", default="cpu", help="Torch device to use for TabPFN (default: cpu).")
+    parser.add_argument(
+        "--model",
+        choices=("tabpfn", "xgboost", "lightgbm"),
+        default="tabpfn",
+        help="Model backend to use for supervised learning (default: tabpfn).",
+    )
+    parser.add_argument(
+        "--n-estimators",
+        type=int,
+        default=32,
+        help="Number of estimators for the selected model (ensemble size or boosting rounds).",
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device to use for TabPFN (ignored for xgboost/lightgbm).",
+    )
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -254,12 +324,38 @@ def encode_targets(y: pd.Series, task_type: TaskType, encoder: Optional[LabelEnc
     raise ValueError(f"Unsupported task type for TabPFN pipeline: {task_type}")
 
 
-def make_model(task_type: TaskType, n_estimators: int, device: str):
-    if task_type == TaskType.REGRESSION:
-        return TabPFNRegressor(device=device, n_estimators=n_estimators)
-    if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
-        return TabPFNClassifier(device=device, n_estimators=n_estimators)
-    raise ValueError(f"Unsupported task type for TabPFN: {task_type}")
+def make_model(task_type: TaskType, model_name: str, n_estimators: int, device: str):
+    if model_name == "tabpfn":
+        if task_type == TaskType.REGRESSION:
+            return TabPFNRegressor(device=device, n_estimators=n_estimators)
+        if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+            return TabPFNClassifier(device=device, n_estimators=n_estimators)
+        raise ValueError(f"Unsupported task type for TabPFN: {task_type}")
+
+    if model_name == "xgboost":
+        if XGBClassifier is None or XGBRegressor is None:
+            raise ImportError("xgboost is required but not installed. Please install xgboost to use this model.")
+        if task_type == TaskType.REGRESSION:
+            return XGBRegressor(n_estimators=n_estimators, objective="reg:squarederror", random_state=0)
+        if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+            return XGBClassifier(
+                n_estimators=n_estimators,
+                random_state=0,
+                use_label_encoder=False,
+                eval_metric="logloss",
+            )
+        raise ValueError(f"Unsupported task type for xgboost: {task_type}")
+
+    if model_name == "lightgbm":
+        if LGBMClassifier is None or LGBMRegressor is None:
+            raise ImportError("lightgbm is required but not installed. Please install lightgbm to use this model.")
+        if task_type == TaskType.REGRESSION:
+            return LGBMRegressor(n_estimators=n_estimators, random_state=0)
+        if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+            return LGBMClassifier(n_estimators=n_estimators, random_state=0)
+        raise ValueError(f"Unsupported task type for lightgbm: {task_type}")
+
+    raise ValueError(f"Unknown model backend: {model_name}")
 
 
 def report_regression(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
@@ -337,8 +433,8 @@ def main() -> None:
     encoder: Optional[LabelEncoder] = None
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
 
-    model = make_model(task.task_type, args.n_estimators, args.device)
-    print("Training TabPFN model ...")
+    model = make_model(task.task_type, args.model, args.n_estimators, args.device)
+    print(f"Training {args.model} model ...")
     model.fit(X_train, y_train)
 
     feature_names = adapter.get_feature_names_out()
