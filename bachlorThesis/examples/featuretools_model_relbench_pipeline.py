@@ -56,10 +56,12 @@ import pandas as pd
 import featuretools as ft
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    roc_auc_score,
 )
 from sklearn.preprocessing import LabelEncoder
 
@@ -366,10 +368,45 @@ def report_regression(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> Non
     )
 
 
-def report_classification(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
-    print(
-        f"[{split}] Accuracy={accuracy_score(y_true, y_pred):.4f}  F1(macro)={f1_score(y_true, y_pred, average='macro'):.4f}"
-    )
+def _probability_metrics(y_true: np.ndarray, y_prob: Optional[np.ndarray]) -> Tuple[Optional[float], Optional[float]]:
+    if y_prob is None:
+        return None, None
+
+    try:
+        if y_prob.ndim == 1 or y_prob.shape[1] == 1:
+            positive_scores = y_prob.ravel()
+        elif y_prob.shape[1] == 2:
+            positive_scores = y_prob[:, 1]
+        else:
+            positive_scores = None
+
+        if positive_scores is not None and len(np.unique(y_true)) == 2:
+            auc = average_precision_score(y_true, positive_scores)
+            roc_auc = roc_auc_score(y_true, positive_scores)
+        else:
+            auc = average_precision_score(y_true, y_prob, average="macro")
+            roc_auc = roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
+    except Exception as exc:  # pragma: no cover - defensive around metric compatibility
+        print(f"      ! Skipping AUC/ROC-AUC ({exc}).")
+        return None, None
+
+    return float(auc), float(roc_auc)
+
+
+def report_classification(
+    split: str, y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray]
+) -> None:
+    auc, roc_auc = _probability_metrics(y_true, y_prob)
+    metrics = [
+        f"Accuracy={accuracy_score(y_true, y_pred):.4f}",
+        f"F1(macro)={f1_score(y_true, y_pred, average='macro'):.4f}",
+    ]
+    if auc is not None:
+        metrics.append(f"AUC={auc:.4f}")
+    if roc_auc is not None:
+        metrics.append(f"ROC-AUC={roc_auc:.4f}")
+
+    print(f"[{split}] " + "  ".join(metrics))
 
 
 def main() -> None:
@@ -461,7 +498,13 @@ def main() -> None:
                 continue
             y_true = encoder.transform(y_series)
             y_pred = model.predict(X_split)
-            report_classification(split_name, y_true, y_pred)
+            y_prob: Optional[np.ndarray] = None
+            if hasattr(model, "predict_proba"):
+                try:
+                    y_prob = np.asarray(model.predict_proba(X_split))
+                except Exception as exc:  # pragma: no cover - optional probability output
+                    print(f"      ! predict_proba failed on split '{split_name}': {exc}")
+            report_classification(split_name, y_true, y_pred, y_prob)
 
 
 if __name__ == "__main__":
