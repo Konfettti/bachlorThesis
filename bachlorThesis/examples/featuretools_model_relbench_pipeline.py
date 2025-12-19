@@ -52,6 +52,7 @@ from typing import Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import CategoricalDtype
 
 import featuretools as ft
 from sklearn.metrics import (
@@ -198,14 +199,31 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     return df
 
 
-def _encode_categoricals(df: pd.DataFrame) -> pd.DataFrame:
+def _fit_categorical_encoders(df: pd.DataFrame) -> Dict[str, CategoricalDtype]:
+    encoders: Dict[str, CategoricalDtype] = {}
+    categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
+    for col in categorical_cols:
+        encoders[col] = CategoricalDtype(categories=pd.Categorical(df[col]).categories)
+    return encoders
+
+
+def _encode_categoricals(df: pd.DataFrame, encoders: Optional[Dict[str, CategoricalDtype]] = None) -> pd.DataFrame:
     if df.empty:
         return df
     df = df.copy()
     categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
     for col in categorical_cols:
-        df[col] = df[col].astype("category").cat.codes.astype("int64")
+        dtype = encoders.get(col) if encoders is not None else None
+        if dtype is None:
+            df[col] = pd.Series(-1, index=df.index, dtype="int64") if encoders else pd.Categorical(df[col]).codes.astype("int64")
+        else:
+            df[col] = pd.Categorical(df[col], categories=dtype.categories).codes.astype("int64")
     return df
+
+
+def _drop_identifier_features(df: pd.DataFrame, entity_col: str) -> pd.DataFrame:
+    drop_cols = [col for col in ("observation_id", entity_col) if col in df.columns]
+    return df.drop(columns=drop_cols) if drop_cols else df
 
 
 def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.DataFrame], Dict[str, TableSpec]]:
@@ -237,7 +255,8 @@ def prepare_observation_dataframe(
     target_col: str,
     entity_col: str,
     max_rows: Optional[int],
-) -> Tuple[pd.DataFrame, pd.Series]:
+    categorical_encoders: Optional[Dict[str, CategoricalDtype]],
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, CategoricalDtype]]:
     """Prepare the task table as a Featuretools target dataframe."""
 
     df = table.df.copy()
@@ -268,9 +287,11 @@ def prepare_observation_dataframe(
         obs_df = obs_df.drop(columns=["index"])
     obs_df["observation_id"] = np.arange(len(obs_df), dtype="int64")
     obs_df = obs_df.set_index("observation_id", drop=False)
-    obs_df = _encode_categoricals(obs_df)
+    if categorical_encoders is None:
+        categorical_encoders = _fit_categorical_encoders(obs_df)
+    obs_df = _encode_categoricals(obs_df, categorical_encoders)
 
-    return obs_df, y
+    return obs_df, y, categorical_encoders
 
 
 def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping[str, pd.DataFrame]], ft.EntitySet]:
@@ -424,13 +445,20 @@ def main() -> None:
 
     print("Preparing task splits ...")
     splits: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
+    categorical_encoders: Optional[Dict[str, CategoricalDtype]] = None
     for split_name in ("train", "val", "test"):
         try:
             table = task.get_table(split_name, mask_input_cols=False)
         except Exception as exc:  # pragma: no cover - defensive in case split missing
             print(f"   • Skipping split '{split_name}' ({exc}).")
             continue
-        obs_df, y = prepare_observation_dataframe(table, task.target_col, task.entity_col, args.max_base_rows)
+        obs_df, y, categorical_encoders = prepare_observation_dataframe(
+            table,
+            task.target_col,
+            task.entity_col,
+            args.max_base_rows,
+            categorical_encoders,
+        )
         if obs_df.empty:
             print(f"   • Split '{split_name}' is empty after preprocessing.")
             continue
@@ -465,7 +493,7 @@ def main() -> None:
     print("Running Deep Feature Synthesis on training data ...")
     adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     X_train = adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
-    X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
+    X_train = _drop_identifier_features(X_train, task.entity_col)
 
     encoder: Optional[LabelEncoder] = None
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
@@ -481,7 +509,7 @@ def main() -> None:
         data_map = dict(base_dataframes)
         data_map["observations"] = obs_df
         X_split = adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]})
-        X_split = np.nan_to_num(X_split, nan=0.0, posinf=0.0, neginf=0.0)
+        X_split = _drop_identifier_features(X_split, task.entity_col)
 
         if task.task_type == TaskType.REGRESSION:
             if y_series.isna().all():
