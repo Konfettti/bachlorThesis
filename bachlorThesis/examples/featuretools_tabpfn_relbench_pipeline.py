@@ -56,12 +56,15 @@ import pandas as pd
 import featuretools as ft
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    roc_auc_score,
 )
 from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import label_binarize
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 
@@ -366,10 +369,61 @@ def report_regression(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> Non
     )
 
 
-def report_classification(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
-    print(
-        f"[{split}] Accuracy={accuracy_score(y_true, y_pred):.4f}  F1(macro)={f1_score(y_true, y_pred, average='macro'):.4f}"
-    )
+def _compute_auc_metrics(
+    task_type: TaskType, y_true: np.ndarray, y_proba: np.ndarray
+) -> Tuple[Optional[float], Optional[float]]:
+    """Return ROC-AUC and PR-AUC (Average Precision) when possible."""
+
+    if task_type == TaskType.BINARY_CLASSIFICATION:
+        # For binary tasks, use the probability of the positive class.
+        pos_scores = y_proba[:, 1] if y_proba.ndim > 1 and y_proba.shape[1] > 1 else y_proba
+        return roc_auc_score(y_true, pos_scores), average_precision_score(y_true, pos_scores)
+
+    if task_type == TaskType.MULTICLASS_CLASSIFICATION:
+        roc_auc = roc_auc_score(y_true, y_proba, multi_class="ovr")
+        y_true_bin = label_binarize(y_true, classes=np.arange(y_proba.shape[1]))
+        pr_auc = average_precision_score(y_true_bin, y_proba, average="macro")
+        return roc_auc, pr_auc
+
+    return None, None
+
+
+def report_classification_with_auc(
+    split: str,
+    task_type: TaskType,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba: Optional[np.ndarray],
+) -> None:
+    accuracy = accuracy_score(y_true, y_pred)
+    f1_macro = f1_score(y_true, y_pred, average="macro")
+
+    message_parts = [f"[{split}] Accuracy={accuracy:.4f}", f"F1(macro)={f1_macro:.4f}"]
+
+    if y_proba is None:
+        message_parts.append("AUC metrics skipped (predict_proba unavailable)")
+    else:
+        try:
+            roc_auc, pr_auc = _compute_auc_metrics(task_type, y_true, y_proba)
+            if roc_auc is not None:
+                message_parts.append(f"ROC-AUC={roc_auc:.4f}")
+            if pr_auc is not None:
+                message_parts.append(f"PR-AUC={pr_auc:.4f}")
+        except Exception as exc:  # pragma: no cover - defensive to avoid breaking runs
+            message_parts.append(f"AUC metrics unavailable ({exc})")
+
+    print("  ".join(message_parts))
+
+
+def _predict_proba_if_available(model, X: np.ndarray) -> Optional[np.ndarray]:
+    if not hasattr(model, "predict_proba"):
+        return None
+
+    try:
+        return np.asarray(model.predict_proba(X))
+    except Exception as exc:  # pragma: no cover - defensive to keep pipeline running
+        print(f"   • Could not compute predict_proba: {exc}; skipping AUC metrics.")
+        return None
 
 
 def main() -> None:
@@ -461,7 +515,8 @@ def main() -> None:
                 continue
             y_true = encoder.transform(y_series)
             y_pred = model.predict(X_split)
-            report_classification(split_name, y_true, y_pred)
+            y_proba = _predict_proba_if_available(model, X_split)
+            report_classification_with_auc(split_name, task.task_type, y_true, y_pred, y_proba)
 
 
 if __name__ == "__main__":
