@@ -192,11 +192,7 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     df = df.copy()
     for col in fkeys:
         if col in df.columns:
-            df[col] = (
-                pd.to_numeric(df[col], errors="coerce")
-                .fillna(-1)
-                .astype("int64")
-            )
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
     return df
 
 
@@ -216,9 +212,10 @@ def _encode_categoricals(df: pd.DataFrame, encoders: Optional[Dict[str, Categori
     for col in categorical_cols:
         dtype = encoders.get(col) if encoders is not None else None
         if dtype is None:
-            df[col] = pd.Series(-1, index=df.index, dtype="int64") if encoders else pd.Categorical(df[col]).codes.astype("int64")
+            codes = pd.Categorical(df[col]).codes
         else:
-            df[col] = pd.Categorical(df[col], categories=dtype.categories).codes.astype("int64")
+            codes = pd.Categorical(df[col], categories=dtype.categories).codes
+        df[col] = pd.Series(codes, index=df.index).replace(-1, pd.NA).astype("Int64")
     return df
 
 
@@ -270,11 +267,7 @@ def prepare_observation_dataframe(
     df = df.reset_index(drop=True)
 
     # Ensure consistent typing
-    df[entity_col] = (
-        pd.to_numeric(df[entity_col], errors="coerce")
-        .fillna(-1)
-        .astype("int64")
-    )
+    df[entity_col] = pd.to_numeric(df[entity_col], errors="coerce").astype("Int64")
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
 

@@ -167,7 +167,6 @@ def simple_feature_engineering(df: pd.DataFrame, entity_col: str) -> pd.DataFram
     features = (
         df.groupby(entity_col, dropna=False)[numeric_cols]
         .agg(["mean", "sum", "count"])
-        .fillna(0)
     )
     features.columns = ["_".join(c).strip() for c in features.columns]
     return features
@@ -189,7 +188,7 @@ def assemble_model_ready_splits(
             df = df.copy()
             df[entity_col] = pd.NA
 
-        enriched = df.merge(features, on=entity_col, how="left").fillna(0.0)
+        enriched = df.merge(features, on=entity_col, how="left")
 
         # Build feature matrix by excluding identifier and target
         excluded = {entity_col, "timestamp", "index"}
@@ -279,7 +278,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
 
