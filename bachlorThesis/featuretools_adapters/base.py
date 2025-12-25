@@ -118,6 +118,11 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
                 feature_matrix = feature_matrix.loc[target_ids]
             feature_matrix = feature_matrix.astype(self._dtype)
 
+        drop_cols = [c for c in ("observation_id", getattr(X, "entity_col", None)) if c in feature_matrix.columns]
+
+        if drop_cols:
+            feature_matrix = feature_matrix.drop(columns=drop_cols)
+
         self._cached_target_ids = list(target_ids) if target_ids is not None else None
         return self._convert_feature_matrix(feature_matrix, X)
 

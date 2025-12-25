@@ -221,11 +221,6 @@ def _encode_categoricals(df: pd.DataFrame, encoders: Optional[Dict[str, Categori
     return df
 
 
-def _drop_identifier_features(df: pd.DataFrame, entity_col: str) -> pd.DataFrame:
-    drop_cols = [col for col in ("observation_id", entity_col) if col in df.columns]
-    return df.drop(columns=drop_cols) if drop_cols else df
-
-
 def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.DataFrame], Dict[str, TableSpec]]:
     """Convert RelBench database tables into DataFrames suitable for Featuretools."""
 
@@ -456,7 +451,7 @@ def main() -> None:
             table,
             task.target_col,
             task.entity_col,
-            args.max_base_rows,
+            args.max_observations,
             categorical_encoders,
         )
         if obs_df.empty:
@@ -493,7 +488,6 @@ def main() -> None:
     print("Running Deep Feature Synthesis on training data ...")
     adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     X_train = adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
-    X_train = _drop_identifier_features(X_train, task.entity_col)
 
     encoder: Optional[LabelEncoder] = None
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
@@ -509,7 +503,6 @@ def main() -> None:
         data_map = dict(base_dataframes)
         data_map["observations"] = obs_df
         X_split = adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]})
-        X_split = _drop_identifier_features(X_split, task.entity_col)
 
         if task.task_type == TaskType.REGRESSION:
             if y_series.isna().all():
