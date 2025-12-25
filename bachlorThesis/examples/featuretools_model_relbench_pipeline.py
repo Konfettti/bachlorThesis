@@ -172,9 +172,11 @@ def parse_args() -> argparse.Namespace:
 
 def _ensure_index_column(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
     if index_col in df.columns:
-        return df
-    df = df.reset_index(drop=True)
-    df[index_col] = df.index.astype("int64")
+        df = df.copy()
+    else:
+        df = df.reset_index(drop=True)
+        df[index_col] = df.index
+    df[index_col] = pd.to_numeric(df[index_col], errors="coerce").astype("Int64")
     return df
 
 
@@ -299,6 +301,14 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
                 add_kwargs["time_index"] = spec.time_col
+            logical_types = {}
+            if spec.index in df.columns:
+                logical_types[spec.index] = "IntegerNullable"
+            for fkey in spec.fkeys.keys():
+                if fkey in df.columns:
+                    logical_types[fkey] = "IntegerNullable"
+            if logical_types:
+                add_kwargs["logical_types"] = logical_types
             es = es.add_dataframe(**add_kwargs)
 
         for child_name, spec in specs.items():
