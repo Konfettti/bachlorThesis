@@ -272,6 +272,42 @@ def _fill_missing(features: np.ndarray, replacements: np.ndarray) -> np.ndarray:
     return np.where(np.isnan(features), replacements, features)
 
 
+def _compute_tabpfn_replacements(features: np.ndarray) -> np.ndarray:
+    """Return column-wise replacements for non-finite values for TabPFN.
+
+    TabPFN performs an SVD-based preprocessing step that fails when NaNs/Infs are
+    present. We compute robust per-column medians using only finite entries and
+    fall back to zeros for columns that are entirely non-finite.
+    """
+
+    if features.size == 0:
+        return np.zeros((features.shape[1] if features.ndim == 2 else 0,), dtype=np.float32)
+
+    features = np.asarray(features, dtype=np.float32, copy=False)
+    medians = np.zeros(features.shape[1], dtype=features.dtype)
+    for col in range(features.shape[1]):
+        col_vals = features[:, col]
+        finite_vals = col_vals[np.isfinite(col_vals)]
+        if finite_vals.size:
+            medians[col] = float(np.median(finite_vals))
+        else:
+            medians[col] = 0.0
+    return medians
+
+
+def _sanitize_tabpfn_features(features: np.ndarray, replacements: np.ndarray) -> np.ndarray:
+    """Replace non-finite entries in ``features`` with precomputed values."""
+
+    if features.size == 0:
+        return np.asarray(features, dtype=np.float32)
+
+    features = np.asarray(features, dtype=np.float32, copy=True)
+    finite_mask = np.isfinite(features)
+    if not finite_mask.all():
+        features = np.where(finite_mask, features, replacements[np.newaxis, :])
+    return features
+
+
 def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.DataFrame], Dict[str, TableSpec]]:
     """Convert RelBench database tables into DataFrames suitable for Featuretools."""
 
@@ -573,9 +609,13 @@ def main() -> None:
     adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     X_train = adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     nan_replacements: Optional[np.ndarray] = None
+    tabpfn_replacements: Optional[np.ndarray] = None
     if args.model == "realmlp":
         nan_replacements = _compute_nan_replacements(X_train)
         X_train = _fill_missing(X_train, nan_replacements)
+    elif args.model == "tabpfn":
+        tabpfn_replacements = _compute_tabpfn_replacements(X_train)
+        X_train = _sanitize_tabpfn_features(X_train, tabpfn_replacements)
 
     encoder: Optional[LabelEncoder] = None
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
@@ -601,6 +641,8 @@ def main() -> None:
         X_split = adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]})
         if nan_replacements is not None:
             X_split = _fill_missing(X_split, nan_replacements)
+        elif tabpfn_replacements is not None:
+            X_split = _sanitize_tabpfn_features(X_split, tabpfn_replacements)
 
         if task.task_type == TaskType.REGRESSION:
             if y_series.isna().all():
