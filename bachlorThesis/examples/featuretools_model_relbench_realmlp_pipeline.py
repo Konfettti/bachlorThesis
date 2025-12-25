@@ -29,7 +29,7 @@ Command-line arguments
 
 ``--model``
     Model backend used after feature generation. Choose between ``tabpfn`` (default),
-    ``xgboost`` or ``lightgbm``.
+    ``xgboost``, ``lightgbm`` or ``realmlp``.
 
 ``--n-estimators``
     Number of estimators used by the selected model. For ``tabpfn`` this controls the
@@ -41,6 +41,15 @@ Command-line arguments
 
 ``--verbose``
     Enable verbose Featuretools output during DFS.
+
+``--realmlp-n-epochs``
+    Number of epochs when training RealMLP-TD (default: 256).
+
+``--realmlp-n-cv``
+    Number of CV folds for bagging/ensembling with RealMLP-TD (default: 1).
+
+``--realmlp-verbosity``
+    Verbosity level for RealMLP-TD training (default: 1).
 """
 
 from __future__ import annotations
@@ -67,6 +76,12 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+try:  # Optional dependency: PyTabKit RealMLP
+    from pytabkit import RealMLP_TD_Classifier, RealMLP_TD_Regressor
+except Exception:  # pragma: no cover - optional dependency may be missing
+    RealMLP_TD_Classifier = None
+    RealMLP_TD_Regressor = None
 
 try:  # Optional dependency: xgboost
     from xgboost import XGBClassifier, XGBRegressor
@@ -147,7 +162,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=("tabpfn", "xgboost", "lightgbm"),
+        choices=("tabpfn", "xgboost", "lightgbm", "realmlp"),
         default="tabpfn",
         help="Model backend to use for supervised learning (default: tabpfn).",
     )
@@ -166,6 +181,19 @@ def parse_args() -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Enable verbose Featuretools output during DFS.",
+    )
+    parser.add_argument("--realmlp-n-epochs", type=int, default=256, help="Number of epochs for RealMLP-TD.")
+    parser.add_argument(
+        "--realmlp-n-cv",
+        type=int,
+        default=1,
+        help="Number of CV folds for bagging/ensembling with RealMLP-TD.",
+    )
+    parser.add_argument(
+        "--realmlp-verbosity",
+        type=int,
+        default=1,
+        help="Verbosity level for RealMLP-TD training.",
     )
     return parser.parse_args()
 
@@ -345,7 +373,15 @@ def encode_targets(y: pd.Series, task_type: TaskType, encoder: Optional[LabelEnc
     raise ValueError(f"Unsupported task type for TabPFN pipeline: {task_type}")
 
 
-def make_model(task_type: TaskType, model_name: str, n_estimators: int, device: str):
+def make_model(
+    task_type: TaskType,
+    model_name: str,
+    n_estimators: int,
+    device: str,
+    realmlp_n_epochs: int,
+    realmlp_n_cv: int,
+    realmlp_verbosity: int,
+):
     if model_name == "tabpfn":
         if task_type == TaskType.REGRESSION:
             return TabPFNRegressor(device=device, n_estimators=n_estimators)
@@ -375,6 +411,27 @@ def make_model(task_type: TaskType, model_name: str, n_estimators: int, device: 
         if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
             return LGBMClassifier(n_estimators=n_estimators, random_state=0)
         raise ValueError(f"Unsupported task type for lightgbm: {task_type}")
+
+    if model_name == "realmlp":
+        if RealMLP_TD_Classifier is None or RealMLP_TD_Regressor is None:
+            raise ImportError("PyTabKit is required but not installed. Please install pytabkit and torch to use RealMLP.")
+        if task_type == TaskType.REGRESSION:
+            return RealMLP_TD_Regressor(
+                device=device,
+                n_epochs=realmlp_n_epochs,
+                n_cv=realmlp_n_cv,
+                random_state=0,
+                verbosity=realmlp_verbosity,
+            )
+        if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+            return RealMLP_TD_Classifier(
+                device=device,
+                n_epochs=realmlp_n_epochs,
+                n_cv=realmlp_n_cv,
+                random_state=0,
+                verbosity=realmlp_verbosity,
+            )
+        raise ValueError(f"Unsupported task type for RealMLP: {task_type}")
 
     raise ValueError(f"Unknown model backend: {model_name}")
 
@@ -495,7 +552,15 @@ def main() -> None:
     encoder: Optional[LabelEncoder] = None
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
 
-    model = make_model(task.task_type, args.model, args.n_estimators, args.device)
+    model = make_model(
+        task.task_type,
+        args.model,
+        args.n_estimators,
+        args.device,
+        args.realmlp_n_epochs,
+        args.realmlp_n_cv,
+        args.realmlp_verbosity,
+    )
     print(f"Training {args.model} model ...")
     model.fit(X_train, y_train)
 
