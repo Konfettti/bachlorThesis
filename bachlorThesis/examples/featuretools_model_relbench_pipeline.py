@@ -59,6 +59,9 @@ import warnings
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, Mapping, Optional, Tuple
 
+import tracemalloc
+from time import perf_counter
+
 import numpy as np
 import pandas as pd
 from pandas.api.types import CategoricalDtype
@@ -109,6 +112,27 @@ from .relbench_small_pipeline import load_task_or_dataset
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+
+def _profile_with_memory(target: Dict[str, Dict[str, float]], label: str, func):
+    tracemalloc.start()
+    start = perf_counter()
+    result = func()
+    duration = perf_counter() - start
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    target[label] = {
+        "runtime_sec": duration,
+        "peak_memory_mb": peak / (1024 * 1024),
+    }
+    return result
+
+
+def _profile_step(target: Dict[str, float], label: str, func):
+    start = perf_counter()
+    result = func()
+    target[label] = perf_counter() - start
+    return result
 
 
 @dataclass(frozen=True)
@@ -518,9 +542,13 @@ def main() -> None:
 
     task = task_or_dataset
     dataset = task.dataset
+    step_timings: Dict[str, float] = {}
+    model_metrics: Dict[str, Dict[str, float]] = {}
 
     print("Preparing relational tables ...")
-    base_dataframes, specs = prepare_base_tables(dataset, args.max_base_rows)
+    base_dataframes, specs = _profile_step(
+        step_timings, "prepare_base_tables_seconds", lambda: prepare_base_tables(dataset, args.max_base_rows)
+    )
 
     print("Preparing task splits ...")
     splits: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
@@ -570,8 +598,14 @@ def main() -> None:
     train_map["observations"] = train_obs
 
     print("Running Deep Feature Synthesis on training data ...")
-    adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
-    X_train = adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
+    _profile_step(
+        step_timings, "dfs_fit_seconds", lambda: adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
+    )
+    X_train = _profile_step(
+        step_timings,
+        "dfs_transform_train_seconds",
+        lambda: adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]}),
+    )
     nan_replacements: Optional[np.ndarray] = None
     if args.model == "realmlp":
         nan_replacements = _compute_nan_replacements(X_train)
@@ -590,7 +624,7 @@ def main() -> None:
         args.realmlp_verbosity,
     )
     print(f"Training {args.model} model ...")
-    model.fit(X_train, y_train)
+    _profile_with_memory(model_metrics, "train", lambda: model.fit(X_train, y_train))
 
     feature_names = adapter.get_feature_names_out()
     print(f"Generated {len(feature_names)} features for observations.")
@@ -598,7 +632,11 @@ def main() -> None:
     for split_name, (obs_df, y_series) in splits.items():
         data_map = dict(base_dataframes)
         data_map["observations"] = obs_df
-        X_split = adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]})
+        X_split = _profile_step(
+            step_timings,
+            f"dfs_transform_{split_name}_seconds",
+            lambda: adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]}),
+        )
         if nan_replacements is not None:
             X_split = _fill_missing(X_split, nan_replacements)
 
@@ -607,7 +645,7 @@ def main() -> None:
                 print(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
             y_true = y_series.to_numpy(dtype=np.float32)
-            y_pred = model.predict(X_split)
+            y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
             report_regression(split_name, y_true, y_pred)
         else:
             if encoder is None:
@@ -616,14 +654,25 @@ def main() -> None:
                 print(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
             y_true = encoder.transform(y_series)
-            y_pred = model.predict(X_split)
+            y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
             y_prob: Optional[np.ndarray] = None
             if hasattr(model, "predict_proba"):
                 try:
-                    y_prob = np.asarray(model.predict_proba(X_split))
+                    y_prob = _profile_with_memory(
+                        model_metrics, f"predict_proba_{split_name}", lambda: np.asarray(model.predict_proba(X_split))
+                    )
                 except Exception as exc:  # pragma: no cover - optional probability output
                     print(f"      ! predict_proba failed on split '{split_name}': {exc}")
             report_classification(split_name, y_true, y_pred, y_prob)
+
+    if step_timings or model_metrics:
+        print("\nPerformance summary")
+        for label, duration in step_timings.items():
+            print(f"   • {label}: {duration:.3f} s")
+        for label, metrics in model_metrics.items():
+            runtime = metrics.get("runtime_sec")
+            peak_mb = metrics.get("peak_memory_mb")
+            print(f"   • model[{label}]: {runtime:.3f} s runtime, {peak_mb:.2f} MB peak memory")
 
 
 if __name__ == "__main__":
