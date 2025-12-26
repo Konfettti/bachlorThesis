@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
+import argparse
+
 from sklearn.datasets import load_iris
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the XGBoost Iris demo.")
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use GPU acceleration if available (requires GPU-enabled XGBoost build).",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Train and evaluate XGBoost on the classic Iris dataset."""
+
+    args = parse_args()
+    tree_method = "gpu_hist" if args.gpu else "hist"
+    predictor = "gpu_predictor" if args.gpu else "auto"
 
     iris = load_iris()
     X_train, X_test, y_train, y_test = train_test_split(
@@ -30,7 +46,8 @@ def main() -> None:
         subsample=0.9,
         colsample_bytree=0.9,
         random_state=42,
-        tree_method="hist",
+        tree_method=tree_method,
+        predictor=predictor,
     )
 
     model.fit(X_train, y_train)

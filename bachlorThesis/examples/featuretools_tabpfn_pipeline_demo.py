@@ -1,4 +1,5 @@
 from __future__ import annotations
+import argparse
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -8,15 +9,16 @@ warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
 warnings.filterwarnings("ignore", message="Could not infer format")
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
+import torch
 from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 from tabpfn import TabPFNClassifier
 
+import featuretools as ft
 from ..featuretools_tabpfn_adapter import (
     FeaturetoolsTabPFNAdapter,
     FeaturetoolsTabPFNConfig,
 )
-import featuretools as ft
 
 
 def make_data() -> dict[str, pd.DataFrame]:
@@ -75,7 +77,28 @@ def builder(dataframes: dict[str, pd.DataFrame]) -> ft.EntitySet:
     return es
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the Featuretools + TabPFN pipeline demo.")
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use the first CUDA device if available (defaults to CPU).",
+    )
+    return parser.parse_args()
+
+
+def resolve_device(use_gpu: bool) -> str:
+    if use_gpu:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested via --gpu but no CUDA device is available.")
+        return "cuda"
+    return "cpu"
+
+
 def main() -> None:
+    args = parse_args()
+    device = resolve_device(args.gpu)
+
     dfs = make_data()
     y = dfs["customers"]["churn"].astype("int64")
 
@@ -96,7 +119,7 @@ def main() -> None:
         X_feat, y.values, test_size=0.33, random_state=42, stratify=y.values
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=32)
+    clf = TabPFNClassifier(device=device, n_estimators=32)
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
     print("Accuracy:", accuracy_score(y_test, y_pred))
