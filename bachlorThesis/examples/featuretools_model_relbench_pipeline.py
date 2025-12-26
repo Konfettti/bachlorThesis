@@ -37,7 +37,10 @@ Command-line arguments
     rounds.
 
 ``--device``
-    Torch device used for TabPFN (ignored for the gradient boosting models).
+    Torch device used for TabPFN/RealMLP. Overridden by ``--gpu`` when provided.
+
+``--gpu``
+    If set, train supported models on the first available CUDA device.
 
 ``--verbose``
     Enable verbose Featuretools output during DFS.
@@ -59,13 +62,14 @@ import warnings
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, Mapping, Optional, Tuple
 
-import tracemalloc
 from time import perf_counter
+import tracemalloc
 
 import numpy as np
 import pandas as pd
 from pandas.api.types import CategoricalDtype
 
+import torch
 import featuretools as ft
 from sklearn.metrics import (
     accuracy_score,
@@ -112,6 +116,14 @@ from .relbench_small_pipeline import load_task_or_dataset
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+
+def resolve_device(use_gpu: bool, requested_device: str) -> str:
+    if use_gpu:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested via --gpu but no CUDA device is available.")
+        return "cuda"
+    return requested_device
 
 
 def _profile_with_memory(target: Dict[str, Dict[str, float]], label: str, func):
@@ -199,7 +211,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         default="cpu",
-        help="Torch device to use for TabPFN (ignored for xgboost/lightgbm).",
+        help="Torch device to use for TabPFN/RealMLP (overridden to 'cuda' when --gpu is set).",
+    )
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use the first CUDA device for supported models (TabPFN, RealMLP, XGBoost, LightGBM).",
     )
     parser.add_argument(
         "--verbose",
@@ -429,6 +446,7 @@ def make_model(
     realmlp_n_epochs: int,
     realmlp_n_cv: int,
     realmlp_verbosity: int,
+    use_gpu: bool,
 ):
     if model_name == "tabpfn":
         if task_type == TaskType.REGRESSION:
@@ -440,24 +458,35 @@ def make_model(
     if model_name == "xgboost":
         if XGBClassifier is None or XGBRegressor is None:
             raise ImportError("xgboost is required but not installed. Please install xgboost to use this model.")
+        tree_method = "gpu_hist" if use_gpu else "hist"
+        predictor = "gpu_predictor" if use_gpu else "auto"
         if task_type == TaskType.REGRESSION:
-            return XGBRegressor(n_estimators=n_estimators, objective="reg:squarederror", random_state=0)
+            return XGBRegressor(
+                n_estimators=n_estimators,
+                objective="reg:squarederror",
+                random_state=0,
+                tree_method=tree_method,
+                predictor=predictor,
+            )
         if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
             return XGBClassifier(
                 n_estimators=n_estimators,
                 random_state=0,
                 use_label_encoder=False,
                 eval_metric="logloss",
+                tree_method=tree_method,
+                predictor=predictor,
             )
         raise ValueError(f"Unsupported task type for xgboost: {task_type}")
 
     if model_name == "lightgbm":
         if LGBMClassifier is None or LGBMRegressor is None:
             raise ImportError("lightgbm is required but not installed. Please install lightgbm to use this model.")
+        device_type = "gpu" if use_gpu else "cpu"
         if task_type == TaskType.REGRESSION:
-            return LGBMRegressor(n_estimators=n_estimators, random_state=0)
+            return LGBMRegressor(n_estimators=n_estimators, random_state=0, device=device_type)
         if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
-            return LGBMClassifier(n_estimators=n_estimators, random_state=0)
+            return LGBMClassifier(n_estimators=n_estimators, random_state=0, device=device_type)
         raise ValueError(f"Unsupported task type for lightgbm: {task_type}")
 
     if model_name == "realmlp":
@@ -535,6 +564,7 @@ def report_classification(
 
 def main() -> None:
     args = parse_args()
+    resolved_device = resolve_device(args.gpu, args.device)
 
     task_or_dataset = load_task_or_dataset(args.dataset, args.preset, args.task)
     if not isinstance(task_or_dataset, BaseTask):
@@ -618,10 +648,11 @@ def main() -> None:
         task.task_type,
         args.model,
         args.n_estimators,
-        args.device,
+        resolved_device,
         args.realmlp_n_epochs,
         args.realmlp_n_cv,
         args.realmlp_verbosity,
+        args.gpu,
     )
     print(f"Training {args.model} model ...")
     _profile_with_memory(model_metrics, "train", lambda: model.fit(X_train, y_train))

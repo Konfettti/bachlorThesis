@@ -85,3 +85,12 @@ For more detailed instructions and additional configuration options, consult the
 
 python -m bachlorThesis.examples.featuretools_tabpfn_relbench_pipeline --dataset rel-event --preset small --task user-attendance --max-base-rows 2000 --max-observations 200 --n-estimators 2 --max-depth 1
 
+## GPU quickstart
+
+GPU support is optional. Ensure you install GPU-enabled builds of PyTorch, XGBoost, and LightGBM that match your CUDA runtime on the RunPod GPU image. Then launch with `--gpu`:
+
+- TabPFN demo: `python -m bachlorThesis.examples.tabpfn_demo --gpu`
+- XGBoost demo: `python -m bachlorThesis.examples.xgboost_demo --gpu`
+- LightGBM demo: `python -m bachlorThesis.examples.lightgbm_demo --gpu`
+- Featuretools + TabPFN pipeline demo: `python -m bachlorThesis.examples.featuretools_tabpfn_pipeline_demo --gpu`
+- RelBench pipeline (TabPFN/RealMLP/XGBoost/LightGBM): `python -m bachlorThesis.examples.featuretools_model_relbench_pipeline --dataset <name> --preset <preset> --task <task> --model <tabpfn|xgboost|lightgbm|realmlp> --gpu`
