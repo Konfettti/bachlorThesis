@@ -138,7 +138,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--agg-primitives",
         nargs="*",
-        default=["count", "num_unique", "mode", "percent_true", "max", "min", "std"],
+        default=["count"],
         help="Aggregation primitives passed to Featuretools DFS.",
     )
     parser.add_argument(
