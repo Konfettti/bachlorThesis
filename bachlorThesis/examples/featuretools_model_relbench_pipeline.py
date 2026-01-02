@@ -67,7 +67,7 @@ import tracemalloc
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import CategoricalDtype
+from pandas.api.types import CategoricalDtype, is_extension_array_dtype, is_integer_dtype
 
 import torch
 import featuretools as ft
@@ -400,6 +400,12 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             for fkey in spec.fkeys.keys():
                 if fkey in df.columns:
                     logical_types[fkey] = "IntegerNullable"
+            for col in df.columns:
+                if col in logical_types:
+                    continue
+                dtype = df[col].dtype
+                if is_integer_dtype(dtype) and is_extension_array_dtype(dtype):
+                    logical_types[col] = "IntegerNullable"
             if logical_types:
                 add_kwargs["logical_types"] = logical_types
             es = es.add_dataframe(**add_kwargs)
