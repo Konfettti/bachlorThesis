@@ -519,12 +519,10 @@ def make_model(
     raise ValueError(f"Unknown model backend: {model_name}")
 
 
-def report_regression(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
+def report_regression(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> str:
     mse = mean_squared_error(y_true, y_pred)
     rmse = float(np.sqrt(mse))
-    print(
-        f"[{split}] R2={r2_score(y_true, y_pred):.4f}  MAE={mean_absolute_error(y_true, y_pred):.4f}  RMSE={rmse:.4f}"
-    )
+    return f"[{split}] R2={r2_score(y_true, y_pred):.4f}  MAE={mean_absolute_error(y_true, y_pred):.4f}  RMSE={rmse:.4f}"
 
 
 def _probability_metrics(y_true: np.ndarray, y_prob: Optional[np.ndarray]) -> Tuple[Optional[float], Optional[float]]:
@@ -545,8 +543,7 @@ def _probability_metrics(y_true: np.ndarray, y_prob: Optional[np.ndarray]) -> Tu
         else:
             auc = average_precision_score(y_true, y_prob, average="macro")
             roc_auc = roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
-    except Exception as exc:  # pragma: no cover - defensive around metric compatibility
-        print(f"      ! Skipping AUC/ROC-AUC ({exc}).")
+    except Exception:  # pragma: no cover - defensive around metric compatibility
         return None, None
 
     return float(auc), float(roc_auc)
@@ -554,7 +551,7 @@ def _probability_metrics(y_true: np.ndarray, y_prob: Optional[np.ndarray]) -> Tu
 
 def report_classification(
     split: str, y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray]
-) -> None:
+) -> str:
     auc, roc_auc = _probability_metrics(y_true, y_prob)
     metrics = [
         f"Accuracy={accuracy_score(y_true, y_pred):.4f}",
@@ -565,12 +562,13 @@ def report_classification(
     if roc_auc is not None:
         metrics.append(f"ROC-AUC={roc_auc:.4f}")
 
-    print(f"[{split}] " + "  ".join(metrics))
+    return f"[{split}] " + "  ".join(metrics)
 
 
 def main() -> None:
     args = parse_args()
     resolved_device = resolve_device(args.gpu, args.device)
+    result_lines: list[str] = []
 
     task_or_dataset = load_task_or_dataset(args.dataset, args.preset, args.task)
     if not isinstance(task_or_dataset, BaseTask):
@@ -581,19 +579,17 @@ def main() -> None:
     step_timings: Dict[str, float] = {}
     model_metrics: Dict[str, Dict[str, float]] = {}
 
-    print("Preparing relational tables ...")
     base_dataframes, specs = _profile_step(
         step_timings, "prepare_base_tables_seconds", lambda: prepare_base_tables(dataset, args.max_base_rows)
     )
 
-    print("Preparing task splits ...")
     splits: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
     categorical_encoders: Optional[Dict[str, CategoricalDtype]] = None
     for split_name in ("train", "val", "test"):
         try:
             table = task.get_table(split_name, mask_input_cols=False)
         except Exception as exc:  # pragma: no cover - defensive in case split missing
-            print(f"   • Skipping split '{split_name}' ({exc}).")
+            result_lines.append(f"[{split_name}] Skipped split ({exc})")
             continue
         obs_df, y, categorical_encoders = prepare_observation_dataframe(
             table,
@@ -603,10 +599,9 @@ def main() -> None:
             categorical_encoders,
         )
         if obs_df.empty:
-            print(f"   • Split '{split_name}' is empty after preprocessing.")
+            result_lines.append(f"[{split_name}] No observations available after preprocessing")
             continue
         splits[split_name] = (obs_df, y)
-        print(f"   • {split_name}: {len(obs_df):,} observations")
 
     if "train" not in splits:
         raise RuntimeError("Training split could not be prepared.")
@@ -633,7 +628,6 @@ def main() -> None:
     train_map = dict(base_dataframes)
     train_map["observations"] = train_obs
 
-    print("Running Deep Feature Synthesis on training data ...")
     _profile_step(
         step_timings, "dfs_fit_seconds", lambda: adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     )
@@ -660,11 +654,10 @@ def main() -> None:
         args.realmlp_verbosity,
         args.gpu,
     )
-    print(f"Training {args.model} model ...")
     _profile_with_memory(model_metrics, "train", lambda: model.fit(X_train, y_train))
 
     feature_names = adapter.get_feature_names_out()
-    print(f"Generated {len(feature_names)} features for observations.")
+    feature_count = len(feature_names)
 
     for split_name, (obs_df, y_series) in splits.items():
         data_map = dict(base_dataframes)
@@ -679,16 +672,16 @@ def main() -> None:
 
         if task.task_type == TaskType.REGRESSION:
             if y_series.isna().all():
-                print(f"[{split_name}] No targets available; skipping evaluation.")
+                result_lines.append(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
             y_true = y_series.to_numpy(dtype=np.float32)
             y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
-            report_regression(split_name, y_true, y_pred)
+            result_lines.append(report_regression(split_name, y_true, y_pred))
         else:
             if encoder is None:
                 raise AssertionError("Encoder must be fitted for classification tasks.")
             if y_series.isna().all():
-                print(f"[{split_name}] No targets available; skipping evaluation.")
+                result_lines.append(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
             y_true = encoder.transform(y_series)
             y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
@@ -699,17 +692,24 @@ def main() -> None:
                         model_metrics, f"predict_proba_{split_name}", lambda: np.asarray(model.predict_proba(X_split))
                     )
                 except Exception as exc:  # pragma: no cover - optional probability output
-                    print(f"      ! predict_proba failed on split '{split_name}': {exc}")
-            report_classification(split_name, y_true, y_pred, y_prob)
+                    result_lines.append(f"[{split_name}] predict_proba failed: {exc}")
+            result_lines.append(report_classification(split_name, y_true, y_pred, y_prob))
+
+    summary_lines = [f"Synthesized features: {feature_count}"]
+    if result_lines:
+        summary_lines.append("Results:")
+        summary_lines.extend(result_lines)
 
     if step_timings or model_metrics:
-        print("\nPerformance summary")
+        summary_lines.append("Performance:")
         for label, duration in step_timings.items():
-            print(f"   • {label}: {duration:.3f} s")
+            summary_lines.append(f"   • {label}: {duration:.3f} s")
         for label, metrics in model_metrics.items():
             runtime = metrics.get("runtime_sec")
             peak_mb = metrics.get("peak_memory_mb")
-            print(f"   • model[{label}]: {runtime:.3f} s runtime, {peak_mb:.2f} MB peak memory")
+            summary_lines.append(f"   • model[{label}]: {runtime:.3f} s runtime, {peak_mb:.2f} MB peak memory")
+
+    print("\n".join(summary_lines))
 
 
 if __name__ == "__main__":
