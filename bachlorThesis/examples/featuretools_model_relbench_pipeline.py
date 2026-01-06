@@ -321,6 +321,25 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     return df
 
 
+def _coerce_non_scalar_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert list/array-like cells to strings so Woodwork can infer logical types."""
+
+    df = df.copy()
+
+    def _convert(value: Any) -> Any:
+        if isinstance(value, (list, tuple, np.ndarray, set)):
+            return " ".join(map(str, value))
+        if isinstance(value, dict):
+            return json.dumps(value)
+        return value
+
+    for col in df.columns:
+        if df[col].map(lambda v: isinstance(v, (list, tuple, np.ndarray, set, dict))).any():
+            df[col] = df[col].apply(_convert)
+
+    return df
+
+
 def _compute_nan_replacements(features: np.ndarray) -> np.ndarray:
     """Return column-wise replacements for NaN values.
 
@@ -361,6 +380,7 @@ def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.
         df = _ensure_index_column(df, index_col)
         df = _coerce_time_column(df, table.time_col)
         df = _coerce_foreign_keys(df, table.fkey_col_to_pkey_table.keys())
+        df = _coerce_non_scalar_columns(df)
 
         dataframes[name] = df
         specs[name] = TableSpec(index=index_col, time_col=table.time_col, fkeys=dict(table.fkey_col_to_pkey_table))
