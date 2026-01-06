@@ -84,6 +84,9 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
         if self.config.interesting_values:
             self._apply_interesting_values(entityset, self.config.interesting_values)
 
+        if target_ids is not None and len(target_ids) == 0:
+            raise ValueError("No target_ids provided for Featuretools DFS.")
+
         feature_matrix, feature_defs = ft.dfs(
             entityset=entityset,
             target_dataframe_name=self.config.target_dataframe_name,
@@ -94,6 +97,7 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
             training_window=self.config.training_window,
             primitive_options=self.config.primitive_options,
             verbose=self.config.verbose,
+            instance_ids=target_ids,
         )
 
         feature_matrix = feature_matrix.sort_index()
@@ -127,6 +131,7 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
             feature_matrix = ft.calculate_feature_matrix(
                 features=self._feature_defs,
                 entityset=entityset,
+                instance_ids=target_ids,
             )
             feature_matrix = feature_matrix[self._feature_columns].sort_index()
             if target_ids is not None:
