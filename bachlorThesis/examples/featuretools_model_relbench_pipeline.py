@@ -689,6 +689,16 @@ def main() -> None:
         "dfs_transform_train_seconds",
         lambda: adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]}),
     )
+    print("X_train shape:", X_train.shape)
+    print("NaN ratio:", np.isnan(X_train).mean())
+    std = np.nanstd(X_train, axis=0)
+    print("Zero-variance columns:", (std == 0).sum(), "/", X_train.shape[1])
+    print("Nonzero columns:", (std > 0).sum())
+
+    baseline = np.full_like(y_train, y_train.mean(), dtype=np.float32)
+    print("Baseline train R2:", r2_score(y_train, baseline))
+    print("Baseline train MAE:", mean_absolute_error(y_train, baseline))
+    
     nan_replacements: Optional[np.ndarray] = None
     if args.model == "realmlp":
         nan_replacements = _compute_nan_replacements(X_train)
@@ -720,6 +730,15 @@ def main() -> None:
             f"dfs_transform_{split_name}_seconds",
             lambda: adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]}),
         )
+        print("X_train shape:", X_train.shape)
+        print("NaN ratio:", np.isnan(X_train).mean())
+        std = np.nanstd(X_train, axis=0)
+        print("Zero-variance columns:", (std == 0).sum(), "/", X_train.shape[1])
+        print("Nonzero columns:", (std > 0).sum())
+
+        baseline = np.full_like(y_train, y_train.mean(), dtype=np.float32)
+        print("Baseline train R2:", r2_score(y_train, baseline))
+        print("Baseline train MAE:", mean_absolute_error(y_train, baseline))
         if nan_replacements is not None:
             X_split = _fill_missing(X_split, nan_replacements)
 
