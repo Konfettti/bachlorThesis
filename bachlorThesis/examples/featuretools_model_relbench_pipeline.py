@@ -21,6 +21,19 @@ Command-line arguments
 ``--max-depth``
     Maximum depth for DFS feature generation.
 
+``--where-primitives``
+    Where primitives passed to Featuretools DFS (enables conditional aggregations).
+
+``--training-window``
+    Featuretools DFS ``training_window`` (e.g. ``30d``, ``90d``). If not set, DFS uses all available history.
+
+``--primitive-options-json``
+    JSON string or path to JSON file defining Featuretools ``primitive_options``. Must be passed through to ``ft.dfs``.
+
+``--interesting-values-json``
+    JSON string or path to JSON file defining interesting values per dataframe/column to enable where features.
+    Format: ``{"dataframe": {"column": [values...]}}``.
+
 ``--max-base-rows``
     Trim relational tables to at most this many rows for quicker experiments.
 
@@ -58,16 +71,18 @@ Command-line arguments
 from __future__ import annotations
 
 import argparse
+import json
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Mapping, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from time import perf_counter
 import tracemalloc
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import CategoricalDtype, is_extension_array_dtype, is_integer_dtype
+from pandas.api.types import is_extension_array_dtype, is_integer_dtype
 
 import torch
 import featuretools as ft
@@ -156,7 +171,7 @@ class TableSpec:
     fkeys: Dict[str, str]
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate relational features with Featuretools and train a model on RelBench tasks.",
     )
@@ -182,6 +197,33 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=["month", "weekday"],
         help="Transform primitives passed to Featuretools DFS.",
+    )
+    parser.add_argument(
+        "--where-primitives",
+        nargs="*",
+        default=None,
+        help="Where primitives passed to Featuretools DFS (enables conditional aggregations).",
+    )
+    parser.add_argument(
+        "--primitive-options-json",
+        type=str,
+        default=None,
+        help="JSON string or path to JSON file defining Featuretools primitive_options. Must be passed through to ft.dfs.",
+    )
+    parser.add_argument(
+        "--interesting-values-json",
+        type=str,
+        default=None,
+        help=(
+            "JSON string or path to JSON file defining interesting values per dataframe/column to enable where "
+            'features. Format: {"dataframe": {"column": [values...]}}'
+        ),
+    )
+    parser.add_argument(
+        "--training-window",
+        type=str,
+        default=None,
+        help="Featuretools DFS training_window (e.g. '30d', '90d'). If not set, DFS uses all available history.",
     )
     parser.add_argument("--max-depth", type=int, default=2, help="Maximum DFS depth.")
     parser.add_argument(
@@ -236,7 +278,20 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Verbosity level for RealMLP-TD training.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def _load_json_argument(value: str, arg_name: str) -> Dict[str, Any]:
+    """Load a JSON object either from a file path or inline string."""
+    candidate_path = Path(value)
+    raw = candidate_path.read_text() if candidate_path.exists() else value
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:  # pragma: no cover - exercised in tests
+        raise ValueError(f"Invalid JSON for {arg_name}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{arg_name} must decode to a JSON object (dict).")
+    return parsed
 
 
 def _ensure_index_column(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
@@ -263,29 +318,6 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     for col in fkeys:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
-    return df
-
-
-def _fit_categorical_encoders(df: pd.DataFrame) -> Dict[str, CategoricalDtype]:
-    encoders: Dict[str, CategoricalDtype] = {}
-    categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
-    for col in categorical_cols:
-        encoders[col] = CategoricalDtype(categories=pd.Categorical(df[col]).categories)
-    return encoders
-
-
-def _encode_categoricals(df: pd.DataFrame, encoders: Optional[Dict[str, CategoricalDtype]] = None) -> pd.DataFrame:
-    if df.empty:
-        return df
-    df = df.copy()
-    categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
-    for col in categorical_cols:
-        dtype = encoders.get(col) if encoders is not None else None
-        if dtype is None:
-            codes = pd.Categorical(df[col]).codes
-        else:
-            codes = pd.Categorical(df[col], categories=dtype.categories).codes
-        df[col] = pd.Series(codes, index=df.index).replace(-1, pd.NA).astype("Int64")
     return df
 
 
@@ -329,7 +361,6 @@ def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.
         df = _ensure_index_column(df, index_col)
         df = _coerce_time_column(df, table.time_col)
         df = _coerce_foreign_keys(df, table.fkey_col_to_pkey_table.keys())
-        df = _encode_categoricals(df)
 
         dataframes[name] = df
         specs[name] = TableSpec(index=index_col, time_col=table.time_col, fkeys=dict(table.fkey_col_to_pkey_table))
@@ -342,8 +373,7 @@ def prepare_observation_dataframe(
     target_col: str,
     entity_col: str,
     max_rows: Optional[int],
-    categorical_encoders: Optional[Dict[str, CategoricalDtype]],
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, CategoricalDtype]]:
+) -> Tuple[pd.DataFrame, pd.Series]:
     """Prepare the task table as a Featuretools target dataframe."""
 
     df = table.df.copy()
@@ -370,11 +400,8 @@ def prepare_observation_dataframe(
         obs_df = obs_df.drop(columns=["index"])
     obs_df["observation_id"] = np.arange(len(obs_df), dtype="int64")
     obs_df = obs_df.set_index("observation_id", drop=False)
-    if categorical_encoders is None:
-        categorical_encoders = _fit_categorical_encoders(obs_df)
-    obs_df = _encode_categoricals(obs_df, categorical_encoders)
 
-    return obs_df, y, categorical_encoders
+    return obs_df, y
 
 
 def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping[str, pd.DataFrame]], ft.EntitySet]:
@@ -389,7 +416,6 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             df = _ensure_index_column(df, spec.index)
             df = _coerce_time_column(df, spec.time_col)
             df = _coerce_foreign_keys(df, spec.fkeys.keys())
-            df = _encode_categoricals(df)
 
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
@@ -567,6 +593,16 @@ def report_classification(
 
 def main() -> None:
     args = parse_args()
+    primitive_options = (
+        _load_json_argument(args.primitive_options_json, "--primitive-options-json")
+        if args.primitive_options_json
+        else None
+    )
+    interesting_values = (
+        _load_json_argument(args.interesting_values_json, "--interesting-values-json")
+        if args.interesting_values_json
+        else None
+    )
     resolved_device = resolve_device(args.gpu, args.device)
     result_lines: list[str] = []
 
@@ -584,20 +620,13 @@ def main() -> None:
     )
 
     splits: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
-    categorical_encoders: Optional[Dict[str, CategoricalDtype]] = None
     for split_name in ("train", "val", "test"):
         try:
             table = task.get_table(split_name, mask_input_cols=False)
         except Exception as exc:  # pragma: no cover - defensive in case split missing
             result_lines.append(f"[{split_name}] Skipped split ({exc})")
             continue
-        obs_df, y, categorical_encoders = prepare_observation_dataframe(
-            table,
-            task.target_col,
-            task.entity_col,
-            args.max_observations,
-            categorical_encoders,
-        )
+        obs_df, y = prepare_observation_dataframe(table, task.target_col, task.entity_col, args.max_observations)
         if obs_df.empty:
             result_lines.append(f"[{split_name}] No observations available after preprocessing")
             continue
@@ -618,7 +647,11 @@ def main() -> None:
         target_dataframe_name="observations",
         agg_primitives=args.agg_primitives,
         trans_primitives=args.trans_primitives,
+        where_primitives=args.where_primitives,
         max_depth=args.max_depth,
+        training_window=args.training_window,
+        primitive_options=primitive_options,
+        interesting_values=interesting_values,
         verbose=args.verbose,
         dtype="float32",
     )
