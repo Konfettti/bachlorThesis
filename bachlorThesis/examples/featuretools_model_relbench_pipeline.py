@@ -745,6 +745,14 @@ def main() -> None:
     train_map = dict(base_dataframes)
     train_map["observations"] = train_obs
 
+    print("obs entity NA ratio:", train_obs[task.entity_col].isna().mean())
+    print("obs entity sample:", train_obs[task.entity_col].head().tolist())
+
+    print("product id dtype:", base_dataframes["product"][specs["product"].index].dtype)
+    print("product id NA ratio:", base_dataframes["product"][specs["product"].index].isna().mean())
+    print("product id sample:", base_dataframes["product"][specs["product"].index].head().tolist())
+
+
     _profile_step(
         step_timings, "dfs_fit_seconds", lambda: adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     )
@@ -753,6 +761,7 @@ def main() -> None:
         "dfs_transform_train_seconds",
         lambda: adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]}),
     )
+    
     nan_replacements: Optional[np.ndarray] = None
     if args.model == "realmlp":
         nan_replacements = _compute_nan_replacements(X_train)
@@ -837,7 +846,16 @@ def main() -> None:
     feature_count = len(feature_names)
 
     for split_name, (obs_df, y_series) in splits.items():
-        X_split = transform_split(split_name)
+        data_map = dict(base_dataframes)
+        data_map["observations"] = obs_df
+        X_split = _profile_step(
+            step_timings,
+            f"dfs_transform_{split_name}_seconds",
+            lambda: adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]}),
+        )
+
+        if nan_replacements is not None:
+            X_split = _fill_missing(X_split, nan_replacements)
 
         if task.task_type == TaskType.REGRESSION:
             y_true = encoded_targets.get(split_name)
