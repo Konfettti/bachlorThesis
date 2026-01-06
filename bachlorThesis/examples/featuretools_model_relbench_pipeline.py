@@ -278,6 +278,54 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=1,
         help="Verbosity level for RealMLP-TD training.",
     )
+    parser.add_argument(
+        "--xgboost-learning-rate",
+        type=float,
+        default=0.05,
+        help="Learning rate for XGBoost models (smaller values pair well with larger n_estimators).",
+    )
+    parser.add_argument(
+        "--xgboost-max-depth",
+        type=int,
+        default=8,
+        help="Maximum tree depth for XGBoost models.",
+    )
+    parser.add_argument(
+        "--xgboost-subsample",
+        type=float,
+        default=0.8,
+        help="Row subsampling ratio per boosting round for XGBoost.",
+    )
+    parser.add_argument(
+        "--xgboost-colsample-bytree",
+        type=float,
+        default=0.8,
+        help="Column subsampling ratio per tree for XGBoost.",
+    )
+    parser.add_argument(
+        "--xgboost-min-child-weight",
+        type=float,
+        default=1.0,
+        help="Minimum sum of instance weight needed in a child for XGBoost.",
+    )
+    parser.add_argument(
+        "--xgboost-reg-alpha",
+        type=float,
+        default=0.1,
+        help="L1 regularisation term on weights for XGBoost.",
+    )
+    parser.add_argument(
+        "--xgboost-reg-lambda",
+        type=float,
+        default=1.5,
+        help="L2 regularisation term on weights for XGBoost.",
+    )
+    parser.add_argument(
+        "--xgboost-early-stopping-rounds",
+        type=int,
+        default=50,
+        help="Early stopping patience for XGBoost when a validation split is available.",
+    )
     return parser.parse_args(argv)
 
 
@@ -499,7 +547,9 @@ def make_model(
     realmlp_n_cv: int,
     realmlp_verbosity: int,
     use_gpu: bool,
+    xgboost_kwargs: Optional[Dict[str, Any]] = None,
 ):
+    xgboost_kwargs = xgboost_kwargs or {}
     if model_name == "tabpfn":
         if task_type == TaskType.REGRESSION:
             return TabPFNRegressor(device=device, n_estimators=n_estimators)
@@ -519,6 +569,8 @@ def make_model(
                 random_state=0,
                 tree_method=tree_method,
                 predictor=predictor,
+                n_jobs=-1,
+                **xgboost_kwargs,
             )
         if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
             return XGBClassifier(
@@ -528,6 +580,8 @@ def make_model(
                 eval_metric="logloss",
                 tree_method=tree_method,
                 predictor=predictor,
+                n_jobs=-1,
+                **xgboost_kwargs,
             )
         raise ValueError(f"Unsupported task type for xgboost: {task_type}")
 
@@ -563,6 +617,16 @@ def make_model(
         raise ValueError(f"Unsupported task type for RealMLP: {task_type}")
 
     raise ValueError(f"Unknown model backend: {model_name}")
+
+
+def _xgboost_eval_metric(task_type: TaskType, encoder: Optional[LabelEncoder]) -> str:
+    if task_type == TaskType.REGRESSION:
+        return "rmse"
+    if task_type == TaskType.BINARY_CLASSIFICATION:
+        return "logloss"
+    if task_type == TaskType.MULTICLASS_CLASSIFICATION:
+        return "mlogloss"
+    raise ValueError(f"Unsupported task type for xgboost eval metric: {task_type}")
 
 
 def report_regression(split: str, y_true: np.ndarray, y_pred: np.ndarray) -> str:
@@ -697,6 +761,42 @@ def main() -> None:
     encoder: Optional[LabelEncoder] = None
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
 
+    transformed_features: Dict[str, np.ndarray] = {"train": X_train}
+    encoded_targets: Dict[str, np.ndarray] = {"train": y_train}
+
+    def transform_split(split_name: str) -> np.ndarray:
+        if split_name in transformed_features:
+            return transformed_features[split_name]
+        obs_df, y_series = splits[split_name]
+        data_map = dict(base_dataframes)
+        data_map["observations"] = obs_df
+        X_split_local = _profile_step(
+            step_timings,
+            f"dfs_transform_{split_name}_seconds",
+            lambda: adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]}),
+        )
+        if nan_replacements is not None:
+            X_split_local = _fill_missing(X_split_local, nan_replacements)
+        transformed_features[split_name] = X_split_local
+        if not y_series.isna().all():
+            if task.task_type == TaskType.REGRESSION:
+                encoded_targets[split_name] = y_series.to_numpy(dtype=np.float32)
+            else:
+                encoded_targets[split_name], _ = encode_targets(y_series, task.task_type, encoder)
+        return X_split_local
+
+    xgboost_kwargs: Optional[Dict[str, Any]] = None
+    if args.model == "xgboost":
+        xgboost_kwargs = {
+            "learning_rate": args.xgboost_learning_rate,
+            "max_depth": args.xgboost_max_depth,
+            "subsample": args.xgboost_subsample,
+            "colsample_bytree": args.xgboost_colsample_bytree,
+            "min_child_weight": args.xgboost_min_child_weight,
+            "reg_alpha": args.xgboost_reg_alpha,
+            "reg_lambda": args.xgboost_reg_lambda,
+        }
+
     model = make_model(
         task.task_type,
         args.model,
@@ -706,37 +806,53 @@ def main() -> None:
         args.realmlp_n_cv,
         args.realmlp_verbosity,
         args.gpu,
+        xgboost_kwargs=xgboost_kwargs,
     )
-    _profile_with_memory(model_metrics, "train", lambda: model.fit(X_train, y_train))
+
+    eval_set = None
+    if args.model == "xgboost" and "val" in splits:
+        _, y_val_series = splits["val"]
+        if not y_val_series.isna().all():
+            X_val = transform_split("val")
+            y_val = encoded_targets.get("val")
+            if y_val is not None:
+                eval_set = [(X_train, y_train), (X_val, y_val)]
+
+    def _fit_model():
+        fit_kwargs: Dict[str, Any] = {}
+        if args.model == "xgboost" and eval_set is not None:
+            model.set_params(eval_metric=_xgboost_eval_metric(task.task_type, encoder))
+            if args.xgboost_early_stopping_rounds > 0:
+                model.set_params(early_stopping_rounds=args.xgboost_early_stopping_rounds)
+            fit_kwargs["eval_set"] = eval_set
+            fit_kwargs["verbose"] = False
+        return model.fit(X_train, y_train, **fit_kwargs)
+
+    _profile_with_memory(model_metrics, "train", _fit_model)
+
+    if args.model == "xgboost" and hasattr(model, "best_iteration") and getattr(model, "best_iteration") is not None:
+        result_lines.append(f"[train] XGBoost best_iteration={model.best_iteration}")
 
     feature_names = adapter.get_feature_names_out()
     feature_count = len(feature_names)
 
     for split_name, (obs_df, y_series) in splits.items():
-        data_map = dict(base_dataframes)
-        data_map["observations"] = obs_df
-        X_split = _profile_step(
-            step_timings,
-            f"dfs_transform_{split_name}_seconds",
-            lambda: adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]}),
-        )
-        if nan_replacements is not None:
-            X_split = _fill_missing(X_split, nan_replacements)
+        X_split = transform_split(split_name)
 
         if task.task_type == TaskType.REGRESSION:
-            if y_series.isna().all():
+            y_true = encoded_targets.get(split_name)
+            if y_true is None:
                 result_lines.append(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
-            y_true = y_series.to_numpy(dtype=np.float32)
             y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
             result_lines.append(report_regression(split_name, y_true, y_pred))
         else:
             if encoder is None:
                 raise AssertionError("Encoder must be fitted for classification tasks.")
-            if y_series.isna().all():
+            y_true = encoded_targets.get(split_name)
+            if y_true is None:
                 result_lines.append(f"[{split_name}] No targets available; skipping evaluation.")
                 continue
-            y_true = encoder.transform(y_series)
             y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
             y_prob: Optional[np.ndarray] = None
             if hasattr(model, "predict_proba"):
