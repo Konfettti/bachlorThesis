@@ -681,6 +681,14 @@ def main() -> None:
     train_map = dict(base_dataframes)
     train_map["observations"] = train_obs
 
+    print("obs entity NA ratio:", train_obs[task.entity_col].isna().mean())
+    print("obs entity sample:", train_obs[task.entity_col].head().tolist())
+
+    print("product id dtype:", base_dataframes["product"][specs["product"].index].dtype)
+    print("product id NA ratio:", base_dataframes["product"][specs["product"].index].isna().mean())
+    print("product id sample:", base_dataframes["product"][specs["product"].index].head().tolist())
+
+
     _profile_step(
         step_timings, "dfs_fit_seconds", lambda: adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     )
