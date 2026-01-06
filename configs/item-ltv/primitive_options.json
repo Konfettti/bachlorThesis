@@ -1,0 +1,50 @@
+{
+  "mean": {
+    "ignore_columns": {
+      "review": ["review_text", "summary", "customer_id", "product_id"],
+      "customer": ["customer_id", "customer_name"],
+      "product": ["product_id", "title", "description", "brand"]
+    }
+  },
+  "std": {
+    "ignore_columns": {
+      "review": ["review_text", "summary", "customer_id", "product_id"],
+      "customer": ["customer_id", "customer_name"],
+      "product": ["product_id", "title", "description", "brand"]
+    }
+  },
+  "min": {
+    "ignore_columns": {
+      "review": ["review_text", "summary", "customer_id", "product_id"],
+      "customer": ["customer_id", "customer_name"],
+      "product": ["product_id", "title", "description", "brand"]
+    }
+  },
+  "max": {
+    "ignore_columns": {
+      "review": ["review_text", "summary", "customer_id", "product_id"],
+      "customer": ["customer_id", "customer_name"],
+      "product": ["product_id", "title", "description", "brand"]
+    }
+  },
+  "num_unique": {
+    "include_columns": {
+      "review": ["customer_id"]
+    }
+  },
+  "mode": {
+    "include_columns": {
+      "product": ["category", "brand"]
+    }
+  },
+  "num_characters": {
+    "include_columns": {
+      "review": ["review_text", "summary"]
+    }
+  },
+  "num_words": {
+    "include_columns": {
+      "review": ["review_text", "summary"]
+    }
+  }
+}
