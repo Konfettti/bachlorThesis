@@ -466,6 +466,15 @@ def main() -> None:
     print("Running Deep Feature Synthesis on training data ...")
     adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
     X_train = adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
+    print("X_train shape:", X_train.shape)
+    print("NaN ratio:", np.isnan(X_train).mean())
+    std = np.nanstd(X_train, axis=0)
+    print("Zero-variance columns:", (std == 0).sum(), "/", X_train.shape[1])
+    print("Nonzero columns:", (std > 0).sum())
+
+    baseline = np.full_like(y_train, y_train.mean(), dtype=np.float32)
+    print("Baseline train R2:", r2_score(y_train, baseline))
+    print("Baseline train MAE:", mean_absolute_error(y_train, baseline))
     X_train = _drop_identifier_features(X_train, task.entity_col)
 
     encoder: Optional[LabelEncoder] = None
