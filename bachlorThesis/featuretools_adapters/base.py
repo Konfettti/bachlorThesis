@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import CategoricalDtype
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
@@ -71,6 +72,31 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
             raise ValueError("Provided labels must be one-dimensional.")
         return labels_array
 
+    @staticmethod
+    def _fit_categorical_encoders(df: pd.DataFrame) -> Dict[str, CategoricalDtype]:
+        encoders: Dict[str, CategoricalDtype] = {}
+        categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
+        for col in categorical_cols:
+            encoders[col] = CategoricalDtype(categories=pd.Categorical(df[col]).categories)
+        return encoders
+
+    @staticmethod
+    def _encode_categoricals(
+        df: pd.DataFrame, encoders: Optional[Dict[str, CategoricalDtype]] = None
+    ) -> pd.DataFrame:
+        if df.empty:
+            return df
+        df = df.copy()
+        categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
+        for col in categorical_cols:
+            dtype = encoders.get(col) if encoders is not None else None
+            if dtype is None:
+                codes = pd.Categorical(df[col]).codes
+            else:
+                codes = pd.Categorical(df[col], categories=dtype.categories).codes
+            df[col] = pd.Series(codes, index=df.index).replace(-1, pd.NA).astype("Int64")
+        return df
+
     def fit(self, X: Mapping[str, object], y: Optional[np.ndarray] = None):  # type: ignore[override]
         dataframes = self._extract_dataframes(X)
         target_ids = self._extract_target_ids(X)
@@ -90,6 +116,8 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
         if target_ids is not None:
             feature_matrix = feature_matrix.loc[target_ids]
 
+        self._categorical_encoders = self._fit_categorical_encoders(feature_matrix)
+        feature_matrix = self._encode_categoricals(feature_matrix, self._categorical_encoders)
         feature_matrix = feature_matrix.astype(self.config.dtype)
 
         self._feature_defs = feature_defs
@@ -116,6 +144,9 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
             feature_matrix = feature_matrix[self._feature_columns].sort_index()
             if target_ids is not None:
                 feature_matrix = feature_matrix.loc[target_ids]
+            feature_matrix = self._encode_categoricals(
+                feature_matrix, getattr(self, "_categorical_encoders", None)
+            )
             feature_matrix = feature_matrix.astype(self._dtype)
 
         drop_cols = [c for c in ("observation_id", getattr(X, "entity_col", None)) if c in feature_matrix.columns]

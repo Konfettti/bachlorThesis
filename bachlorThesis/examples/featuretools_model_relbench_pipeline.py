@@ -67,7 +67,7 @@ import tracemalloc
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import CategoricalDtype, is_extension_array_dtype, is_integer_dtype
+from pandas.api.types import is_extension_array_dtype, is_integer_dtype
 
 import torch
 import featuretools as ft
@@ -266,29 +266,6 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     return df
 
 
-def _fit_categorical_encoders(df: pd.DataFrame) -> Dict[str, CategoricalDtype]:
-    encoders: Dict[str, CategoricalDtype] = {}
-    categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
-    for col in categorical_cols:
-        encoders[col] = CategoricalDtype(categories=pd.Categorical(df[col]).categories)
-    return encoders
-
-
-def _encode_categoricals(df: pd.DataFrame, encoders: Optional[Dict[str, CategoricalDtype]] = None) -> pd.DataFrame:
-    if df.empty:
-        return df
-    df = df.copy()
-    categorical_cols = df.select_dtypes(include=["object", "category", "string"]).columns
-    for col in categorical_cols:
-        dtype = encoders.get(col) if encoders is not None else None
-        if dtype is None:
-            codes = pd.Categorical(df[col]).codes
-        else:
-            codes = pd.Categorical(df[col], categories=dtype.categories).codes
-        df[col] = pd.Series(codes, index=df.index).replace(-1, pd.NA).astype("Int64")
-    return df
-
-
 def _compute_nan_replacements(features: np.ndarray) -> np.ndarray:
     """Return column-wise replacements for NaN values.
 
@@ -329,8 +306,6 @@ def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.
         df = _ensure_index_column(df, index_col)
         df = _coerce_time_column(df, table.time_col)
         df = _coerce_foreign_keys(df, table.fkey_col_to_pkey_table.keys())
-        df = _encode_categoricals(df)
-
         dataframes[name] = df
         specs[name] = TableSpec(index=index_col, time_col=table.time_col, fkeys=dict(table.fkey_col_to_pkey_table))
 
@@ -342,8 +317,7 @@ def prepare_observation_dataframe(
     target_col: str,
     entity_col: str,
     max_rows: Optional[int],
-    categorical_encoders: Optional[Dict[str, CategoricalDtype]],
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, CategoricalDtype]]:
+) -> Tuple[pd.DataFrame, pd.Series]:
     """Prepare the task table as a Featuretools target dataframe."""
 
     df = table.df.copy()
@@ -370,11 +344,7 @@ def prepare_observation_dataframe(
         obs_df = obs_df.drop(columns=["index"])
     obs_df["observation_id"] = np.arange(len(obs_df), dtype="int64")
     obs_df = obs_df.set_index("observation_id", drop=False)
-    if categorical_encoders is None:
-        categorical_encoders = _fit_categorical_encoders(obs_df)
-    obs_df = _encode_categoricals(obs_df, categorical_encoders)
-
-    return obs_df, y, categorical_encoders
+    return obs_df, y
 
 
 def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping[str, pd.DataFrame]], ft.EntitySet]:
@@ -389,8 +359,6 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             df = _ensure_index_column(df, spec.index)
             df = _coerce_time_column(df, spec.time_col)
             df = _coerce_foreign_keys(df, spec.fkeys.keys())
-            df = _encode_categoricals(df)
-
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
                 add_kwargs["time_index"] = spec.time_col
@@ -584,19 +552,17 @@ def main() -> None:
     )
 
     splits: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
-    categorical_encoders: Optional[Dict[str, CategoricalDtype]] = None
     for split_name in ("train", "val", "test"):
         try:
             table = task.get_table(split_name, mask_input_cols=False)
         except Exception as exc:  # pragma: no cover - defensive in case split missing
             result_lines.append(f"[{split_name}] Skipped split ({exc})")
             continue
-        obs_df, y, categorical_encoders = prepare_observation_dataframe(
+        obs_df, y = prepare_observation_dataframe(
             table,
             task.target_col,
             task.entity_col,
             args.max_observations,
-            categorical_encoders,
         )
         if obs_df.empty:
             result_lines.append(f"[{split_name}] No observations available after preprocessing")
