@@ -23,8 +23,13 @@ class FeaturetoolsAdapterConfig:
 
     target_dataframe_name: str
     agg_primitives: Optional[List[str]] = None
+    agg_primitive_dataframes: Optional[List[str]] = None
+    agg_primitive_include_columns: Optional[Dict[str, List[str]]] = None
+    agg_primitive_ignore_columns: Optional[Dict[str, List[str]]] = None
+    agg_primitive_options: Optional[Dict[str, Dict[str, object]]] = None
     trans_primitives: Optional[List[str]] = None
     max_depth: int = 2
+    training_window: Optional[str] = None
     verbose: bool = False
     dtype: str = "float32"
 
@@ -103,11 +108,41 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
 
         entityset = self.entityset_builder(dataframes)
 
+        primitive_options = None
+        if self.config.agg_primitives:
+            primitive_options = (
+                {key: dict(value) for key, value in self.config.agg_primitive_options.items()}
+                if self.config.agg_primitive_options
+                else {}
+            )
+            has_scoping = any(
+                (
+                    self.config.agg_primitive_dataframes,
+                    self.config.agg_primitive_include_columns,
+                    self.config.agg_primitive_ignore_columns,
+                )
+            )
+            if has_scoping:
+                for primitive in self.config.agg_primitives:
+                    options = primitive_options.setdefault(primitive, {})
+                    if self.config.agg_primitive_dataframes and "include_dataframes" not in options:
+                        options["include_dataframes"] = list(self.config.agg_primitive_dataframes)
+                    if self.config.agg_primitive_include_columns and "include_columns" not in options:
+                        options["include_columns"] = self.config.agg_primitive_include_columns
+                    if self.config.agg_primitive_ignore_columns and "ignore_columns" not in options:
+                        options["ignore_columns"] = self.config.agg_primitive_ignore_columns
+            primitive_options = primitive_options or None
+
+        cutoff_time = X.get("cutoff_time") if isinstance(X, Mapping) else None
+
         feature_matrix, feature_defs = ft.dfs(
             entityset=entityset,
             target_dataframe_name=self.config.target_dataframe_name,
+            cutoff_time=cutoff_time,
             agg_primitives=self.config.agg_primitives,
             trans_primitives=self.config.trans_primitives,
+            primitive_options=primitive_options,
+            training_window=self.config.training_window,
             max_depth=self.config.max_depth,
             verbose=self.config.verbose,
         )
@@ -149,7 +184,8 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
             )
             feature_matrix = feature_matrix.astype(self._dtype)
 
-        drop_cols = [c for c in ("observation_id", getattr(X, "entity_col", None)) if c in feature_matrix.columns]
+        entity_col = X.get("entity_col") if isinstance(X, Mapping) else getattr(X, "entity_col", None)
+        drop_cols = [c for c in ("observation_id", entity_col) if c in feature_matrix.columns]
 
         if drop_cols:
             feature_matrix = feature_matrix.drop(columns=drop_cols)
