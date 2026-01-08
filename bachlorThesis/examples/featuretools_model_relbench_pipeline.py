@@ -15,11 +15,26 @@ Command-line arguments
 ``--agg-primitives``
     Aggregation primitives passed to Featuretools Deep Feature Synthesis (DFS).
 
+``--agg-dataframes``
+    Optional list of dataframes that should receive aggregation primitives.
+
+``--agg-primitive-options``
+    JSON mapping of per-primitive options (e.g. ``{"sum": {"include_dataframes": ["transactions"]}}``).
+
+``--agg-include-columns``
+    Optional list of columns (format: ``table.column``) that should receive aggregation primitives.
+
+``--agg-ignore-columns``
+    Optional list of columns (format: ``table.column``) that should be excluded from aggregation primitives.
+
 ``--trans-primitives``
     Transform primitives passed to Featuretools DFS.
 
 ``--max-depth``
     Maximum depth for DFS feature generation.
+
+``--training-window``
+    Featuretools DFS ``training_window`` (e.g. ``30d``, ``90d``). If not set, DFS uses all available history.
 
 ``--max-base-rows``
     Trim relational tables to at most this many rows for quicker experiments.
@@ -58,9 +73,10 @@ Command-line arguments
 from __future__ import annotations
 
 import argparse
+import json
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Mapping, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from time import perf_counter
 import tracemalloc
@@ -178,12 +194,40 @@ def parse_args() -> argparse.Namespace:
         help="Aggregation primitives passed to Featuretools DFS.",
     )
     parser.add_argument(
+        "--agg-dataframes",
+        nargs="*",
+        default=None,
+        help="Restrict aggregation primitives to these dataframes (default: apply to all).",
+    )
+    parser.add_argument(
+        "--agg-primitive-options",
+        default=None,
+        help="JSON mapping of per-primitive options passed to Featuretools primitive_options.",
+    )
+    parser.add_argument(
+        "--agg-include-columns",
+        nargs="*",
+        default=None,
+        help="Restrict aggregation primitives to these columns (format: table.column).",
+    )
+    parser.add_argument(
+        "--agg-ignore-columns",
+        nargs="*",
+        default=None,
+        help="Exclude these columns from aggregation primitives (format: table.column).",
+    )
+    parser.add_argument(
         "--trans-primitives",
         nargs="*",
         default=["month", "weekday"],
         help="Transform primitives passed to Featuretools DFS.",
     )
     parser.add_argument("--max-depth", type=int, default=2, help="Maximum DFS depth.")
+    parser.add_argument(
+        "--training-window",
+        default=None,
+        help="Featuretools DFS training_window (e.g. 30d, 90d). If unset, use full history.",
+    )
     parser.add_argument(
         "--max-base-rows",
         type=int,
@@ -264,6 +308,30 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
     return df
+
+
+def _parse_column_specs(items: Optional[Iterable[str]]) -> Optional[Dict[str, List[str]]]:
+    if not items:
+        return None
+    mapping: Dict[str, List[str]] = {}
+    for item in items:
+        if "." not in item:
+            raise ValueError(f"Expected column spec 'table.column', got '{item}'.")
+        table, column = item.split(".", 1)
+        mapping.setdefault(table, []).append(column)
+    return mapping
+
+
+def _parse_primitive_options(raw: Optional[str]) -> Optional[Dict[str, Dict[str, object]]]:
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON for --agg-primitive-options: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("--agg-primitive-options must decode to a JSON object.")
+    return parsed
 
 
 def _compute_nan_replacements(features: np.ndarray) -> np.ndarray:
@@ -583,8 +651,13 @@ def main() -> None:
     cfg = FeaturetoolsTabPFNConfig(
         target_dataframe_name="observations",
         agg_primitives=args.agg_primitives,
+        agg_primitive_dataframes=args.agg_dataframes,
+        agg_primitive_options=_parse_primitive_options(args.agg_primitive_options),
+        agg_primitive_include_columns=_parse_column_specs(args.agg_include_columns),
+        agg_primitive_ignore_columns=_parse_column_specs(args.agg_ignore_columns),
         trans_primitives=args.trans_primitives,
         max_depth=args.max_depth,
+        training_window=args.training_window,
         verbose=args.verbose,
         dtype="float32",
     )
@@ -594,9 +667,13 @@ def main() -> None:
     train_map = dict(base_dataframes)
     train_map["observations"] = train_obs
 
-    _profile_step(
-        step_timings, "dfs_fit_seconds", lambda: adapter.fit({"dataframes": train_map, "target_ids": train_obs["observation_id"]})
-    )
+    fit_payload = {"dataframes": train_map, "target_ids": train_obs["observation_id"]}
+    if args.training_window:
+        if observation_time_col is None:
+            raise RuntimeError("training_window requires a timestamp column on observations.")
+        fit_payload["cutoff_time"] = train_obs[["observation_id", observation_time_col]]
+
+    _profile_step(step_timings, "dfs_fit_seconds", lambda: adapter.fit(fit_payload))
     X_train = _profile_step(
         step_timings,
         "dfs_transform_train_seconds",
