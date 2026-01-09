@@ -674,10 +674,13 @@ def main() -> None:
         fit_payload["cutoff_time"] = train_obs[["observation_id", observation_time_col]]
 
     _profile_step(step_timings, "dfs_fit_seconds", lambda: adapter.fit(fit_payload))
+    transform_payload = {"dataframes": train_map, "target_ids": train_obs["observation_id"]}
+    if args.training_window:
+        transform_payload["cutoff_time"] = train_obs[["observation_id", observation_time_col]]
     X_train = _profile_step(
         step_timings,
         "dfs_transform_train_seconds",
-        lambda: adapter.transform({"dataframes": train_map, "target_ids": train_obs["observation_id"]}),
+        lambda: adapter.transform(transform_payload),
     )
     nan_replacements: Optional[np.ndarray] = None
     if args.model == "realmlp":
@@ -705,10 +708,13 @@ def main() -> None:
     for split_name, (obs_df, y_series) in splits.items():
         data_map = dict(base_dataframes)
         data_map["observations"] = obs_df
+        transform_payload = {"dataframes": data_map, "target_ids": obs_df["observation_id"]}
+        if args.training_window:
+            transform_payload["cutoff_time"] = obs_df[["observation_id", observation_time_col]]
         X_split = _profile_step(
             step_timings,
             f"dfs_transform_{split_name}_seconds",
-            lambda: adapter.transform({"dataframes": data_map, "target_ids": obs_df["observation_id"]}),
+            lambda: adapter.transform(transform_payload),
         )
         if nan_replacements is not None:
             X_split = _fill_missing(X_split, nan_replacements)

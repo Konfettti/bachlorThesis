@@ -167,6 +167,11 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
 
         dataframes = self._extract_dataframes(X)
         target_ids = self._extract_target_ids(X)
+        cutoff_time = X.get("cutoff_time") if isinstance(X, Mapping) else None
+        if self.config.training_window and cutoff_time is None:
+            raise ValueError(
+                "cutoff_time must be provided when training_window is set to avoid leakage."
+            )
 
         if target_ids is not None and target_ids == getattr(self, "_cached_target_ids", None):
             feature_matrix = self._training_feature_matrix.copy()
@@ -175,6 +180,7 @@ class FeaturetoolsAdapterBase(BaseEstimator, TransformerMixin):
             feature_matrix = ft.calculate_feature_matrix(
                 features=self._feature_defs,
                 entityset=entityset,
+                cutoff_time=cutoff_time,
             )
             feature_matrix = feature_matrix[self._feature_columns].sort_index()
             if target_ids is not None:

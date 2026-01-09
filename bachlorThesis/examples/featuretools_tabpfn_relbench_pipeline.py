@@ -567,13 +567,14 @@ def main() -> None:
         fit_payload["cutoff_time"] = train_obs[["observation_id", observation_time_col]]
 
     adapter.fit(fit_payload)
-    X_train = adapter.transform(
-        {
-            "dataframes": train_map,
-            "target_ids": train_obs["observation_id"],
-            "entity_col": task.entity_col,
-        }
-    )
+    transform_payload = {
+        "dataframes": train_map,
+        "target_ids": train_obs["observation_id"],
+        "entity_col": task.entity_col,
+    }
+    if args.training_window:
+        transform_payload["cutoff_time"] = train_obs[["observation_id", observation_time_col]]
+    X_train = adapter.transform(transform_payload)
     X_train = _drop_identifier_features(X_train, task.entity_col)
 
     encoder: Optional[LabelEncoder] = None
@@ -589,13 +590,14 @@ def main() -> None:
     for split_name, (obs_df, y_series) in splits.items():
         data_map = dict(base_dataframes)
         data_map["observations"] = obs_df
-        X_split = adapter.transform(
-            {
-                "dataframes": data_map,
-                "target_ids": obs_df["observation_id"],
-                "entity_col": task.entity_col,
-            }
-        )
+        transform_payload = {
+            "dataframes": data_map,
+            "target_ids": obs_df["observation_id"],
+            "entity_col": task.entity_col,
+        }
+        if args.training_window:
+            transform_payload["cutoff_time"] = obs_df[["observation_id", observation_time_col]]
+        X_split = adapter.transform(transform_payload)
         X_split = _drop_identifier_features(X_split, task.entity_col)
 
         if task.task_type == TaskType.REGRESSION:
