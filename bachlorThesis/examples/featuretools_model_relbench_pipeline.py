@@ -327,6 +327,27 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     return df
 
 
+def _coerce_array_like_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for column in df.columns:
+        if df[column].dtype != object:
+            continue
+        series = df[column]
+        sample = series.dropna().head(1)
+        if sample.empty:
+            continue
+        value = sample.iloc[0]
+        if isinstance(value, (list, tuple, np.ndarray)):
+            df[column] = series.map(
+                lambda item: tuple(item.tolist())
+                if isinstance(item, np.ndarray)
+                else tuple(item)
+                if isinstance(item, (list, tuple))
+                else item
+            )
+    return df
+
+
 def _parse_column_specs(items: Optional[Iterable[str]]) -> Optional[Dict[str, List[str]]]:
     if not items:
         return None
@@ -444,6 +465,7 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             df = _ensure_index_column(df, spec.index)
             df = _coerce_time_column(df, spec.time_col)
             df = _coerce_foreign_keys(df, spec.fkeys.keys())
+            df = _coerce_array_like_columns(df)
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
                 add_kwargs["time_index"] = spec.time_col
