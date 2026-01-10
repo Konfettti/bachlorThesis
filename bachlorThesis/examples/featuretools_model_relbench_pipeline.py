@@ -432,7 +432,7 @@ def prepare_observation_dataframe(
         subset_cols.append(target_col)
     df = df.dropna(subset=subset_cols)
     if max_rows is not None and len(df) > max_rows:
-        df = df.head(max_rows)
+        df = df.sample(n=max_rows, random_state=0)
     df = df.reset_index(drop=True)
 
     # Ensure consistent typing
