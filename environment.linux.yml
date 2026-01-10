@@ -77,7 +77,7 @@ dependencies:
   - munkres=1.1.4
   - mysql-common=9.3.0
   - mysql-libs=9.3.0
-  - numpy=2.4.0
+  - numpy=1.26.4
   - opencl-headers=2025.06.13
   - openjpeg=2.5.4
   - openssl=3.6.0
@@ -142,6 +142,7 @@ dependencies:
       - charset-normalizer==3.4.4
       - click==8.3.1
       - distro==1.9.0
+      - datasets==2.19.2
       - duckdb==1.4.3
       - einops==0.8.1
       - eval-type-backport==0.3.1
@@ -164,7 +165,7 @@ dependencies:
       - pooch==1.8.2
       - posthog==6.9.3
       - propcache==0.4.1
-      - pyarrow==22.0.0
+      - pyarrow==14.0.2
       - pydantic==2.12.5
       - pydantic-core==2.41.5
       - pydantic-settings==2.12.0

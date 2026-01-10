@@ -74,6 +74,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+import types
 import warnings
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -117,6 +119,21 @@ try:  # Optional dependency: lightgbm
 except Exception:  # pragma: no cover - optional dependency may be missing
     LGBMClassifier = None
     LGBMRegressor = None
+
+def _ensure_datasets_exceptions_module() -> None:
+    """Ensure datasets.exceptions is importable for relbench compatibility."""
+    if "datasets.exceptions" in sys.modules:
+        return
+
+    class DatasetNotFoundError(FileNotFoundError):
+        """Fallback DatasetNotFoundError for datasets 3+."""
+
+    module = types.ModuleType("datasets.exceptions")
+    module.DatasetNotFoundError = DatasetNotFoundError
+    sys.modules["datasets.exceptions"] = module
+
+
+_ensure_datasets_exceptions_module()
 
 from relbench.base import TaskType
 from relbench.base.database import Database
