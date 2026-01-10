@@ -533,8 +533,8 @@ def apply_target_transform(y: pd.Series, transform: str) -> pd.Series:
     if transform == "none":
         return y
     if transform == "log1p":
-        if (y < -1).any():
-            raise ValueError("log1p target transform requires all targets to be >= -1.")
+        if (y <= -1).any():
+            raise ValueError("log1p target transform requires all targets to be > -1.")
         return np.log1p(y)
     raise ValueError(f"Unsupported target transform: {transform}")
 
