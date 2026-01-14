@@ -46,6 +46,10 @@ Command-line arguments
     Model backend used after feature generation. Choose between ``tabpfn`` (default),
     ``xgboost``, ``lightgbm`` or ``realmlp``.
 
+``--target-transform``
+    Optional target transform for regression tasks (``none`` or ``log1p``). ``log1p``
+    trains on ``log(1 + y)`` and reports metrics on the original scale.
+
 ``--n-estimators``
     Number of estimators used by the selected model. For ``tabpfn`` this controls the
     ensemble size, while for ``xgboost`` and ``lightgbm`` it maps to the number of boosting
@@ -74,6 +78,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+import types
 import warnings
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -117,6 +123,21 @@ try:  # Optional dependency: lightgbm
 except Exception:  # pragma: no cover - optional dependency may be missing
     LGBMClassifier = None
     LGBMRegressor = None
+
+def _ensure_datasets_exceptions_module() -> None:
+    """Ensure datasets.exceptions is importable for relbench compatibility."""
+    if "datasets.exceptions" in sys.modules:
+        return
+
+    class DatasetNotFoundError(FileNotFoundError):
+        """Fallback DatasetNotFoundError for datasets 3+."""
+
+    module = types.ModuleType("datasets.exceptions")
+    module.DatasetNotFoundError = DatasetNotFoundError
+    sys.modules["datasets.exceptions"] = module
+
+
+_ensure_datasets_exceptions_module()
 
 from relbench.base import TaskType
 from relbench.base.database import Database
@@ -247,6 +268,12 @@ def parse_args() -> argparse.Namespace:
         help="Model backend to use for supervised learning (default: tabpfn).",
     )
     parser.add_argument(
+        "--target-transform",
+        choices=("none", "log1p"),
+        default="none",
+        help="Optional regression target transform (default: none).",
+    )
+    parser.add_argument(
         "--n-estimators",
         type=int,
         default=32,
@@ -307,6 +334,27 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     for col in fkeys:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    return df
+
+
+def _coerce_array_like_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for column in df.columns:
+        if df[column].dtype != object:
+            continue
+        series = df[column]
+        sample = series.dropna().head(1)
+        if sample.empty:
+            continue
+        value = sample.iloc[0]
+        if isinstance(value, (list, tuple, np.ndarray)):
+            df[column] = series.map(
+                lambda item: tuple(item.tolist())
+                if isinstance(item, np.ndarray)
+                else tuple(item)
+                if isinstance(item, (list, tuple))
+                else item
+            )
     return df
 
 
@@ -394,7 +442,7 @@ def prepare_observation_dataframe(
         subset_cols.append(target_col)
     df = df.dropna(subset=subset_cols)
     if max_rows is not None and len(df) > max_rows:
-        df = df.head(max_rows)
+        df = df.sample(n=max_rows, random_state=0)
     df = df.reset_index(drop=True)
 
     # Ensure consistent typing
@@ -427,6 +475,7 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             df = _ensure_index_column(df, spec.index)
             df = _coerce_time_column(df, spec.time_col)
             df = _coerce_foreign_keys(df, spec.fkeys.keys())
+            df = _coerce_array_like_columns(df)
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
                 add_kwargs["time_index"] = spec.time_col
@@ -478,6 +527,24 @@ def encode_targets(y: pd.Series, task_type: TaskType, encoder: Optional[LabelEnc
         return transformed, enc
 
     raise ValueError(f"Unsupported task type for TabPFN pipeline: {task_type}")
+
+
+def apply_target_transform(y: pd.Series, transform: str) -> pd.Series:
+    if transform == "none":
+        return y
+    if transform == "log1p":
+        if (y <= -1).any():
+            raise ValueError("log1p target transform requires all targets to be > -1.")
+        return np.log1p(y)
+    raise ValueError(f"Unsupported target transform: {transform}")
+
+
+def invert_target_transform(values: np.ndarray, transform: str) -> np.ndarray:
+    if transform == "none":
+        return values
+    if transform == "log1p":
+        return np.expm1(values)
+    raise ValueError(f"Unsupported target transform: {transform}")
 
 
 def make_model(
@@ -614,6 +681,8 @@ def main() -> None:
     dataset = task.dataset
     step_timings: Dict[str, float] = {}
     model_metrics: Dict[str, Dict[str, float]] = {}
+    if args.target_transform != "none" and task.task_type != TaskType.REGRESSION:
+        raise ValueError("--target-transform is only supported for regression tasks.")
 
     base_dataframes, specs = _profile_step(
         step_timings, "prepare_base_tables_seconds", lambda: prepare_base_tables(dataset, args.max_base_rows)
@@ -688,6 +757,8 @@ def main() -> None:
         X_train = _fill_missing(X_train, nan_replacements)
 
     encoder: Optional[LabelEncoder] = None
+    if task.task_type == TaskType.REGRESSION:
+        y_train_series = apply_target_transform(y_train_series, args.target_transform)
     y_train, encoder = encode_targets(y_train_series, task.task_type, encoder)
 
     model = make_model(
@@ -725,6 +796,7 @@ def main() -> None:
                 continue
             y_true = y_series.to_numpy(dtype=np.float32)
             y_pred = _profile_with_memory(model_metrics, f"predict_{split_name}", lambda: model.predict(X_split))
+            y_pred = invert_target_transform(np.asarray(y_pred, dtype=np.float32), args.target_transform)
             result_lines.append(report_regression(split_name, y_true, y_pred))
         else:
             if encoder is None:
