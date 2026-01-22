@@ -9,3 +9,4 @@ __pycache__/
 # IDE settings
 .vscode/
 .idea/
+event/event.db
