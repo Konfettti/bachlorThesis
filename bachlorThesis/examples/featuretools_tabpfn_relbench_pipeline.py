@@ -63,12 +63,19 @@ from __future__ import annotations
 import argparse
 import warnings
 from dataclasses import dataclass
+from numbers import Number
 import json
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_extension_array_dtype, is_integer_dtype
+from pandas.api.types import (
+    is_bool_dtype,
+    is_extension_array_dtype,
+    is_integer_dtype,
+    is_numeric_dtype,
+    is_string_dtype,
+)
 
 import featuretools as ft
 from sklearn.metrics import (
@@ -240,6 +247,40 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     return df
 
 
+def _coerce_nullable_numeric_features(df: pd.DataFrame, exclude_cols: Iterable[str]) -> pd.DataFrame:
+    df = df.copy()
+    exclude_set = set(exclude_cols)
+    for column in df.columns:
+        if column in exclude_set:
+            continue
+        dtype = df[column].dtype
+        if is_bool_dtype(dtype):
+            continue
+        if is_numeric_dtype(dtype) and is_extension_array_dtype(dtype):
+            df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
+    return df
+
+
+def _coerce_object_numeric_columns(df: pd.DataFrame, exclude_cols: Iterable[str]) -> pd.DataFrame:
+    df = df.copy()
+    exclude_set = set(exclude_cols)
+    for column in df.columns:
+        if column in exclude_set:
+            continue
+        series = df[column]
+        if series.dtype != object and not is_string_dtype(series.dtype):
+            continue
+        non_null = series.dropna()
+        if non_null.empty:
+            continue
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() != len(non_null):
+            if not non_null.map(lambda value: isinstance(value, Number)).all():
+                continue
+        df[column] = numeric.astype("float64")
+    return df
+
+
 def _drop_identifier_features(df, entity_col: str):
     if not hasattr(df, "columns"):
         return df
@@ -287,6 +328,8 @@ def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.
         df = _ensure_index_column(df, index_col)
         df = _coerce_time_column(df, table.time_col)
         df = _coerce_foreign_keys(df, table.fkey_col_to_pkey_table.keys())
+        df = _coerce_nullable_numeric_features(df, [index_col, *table.fkey_col_to_pkey_table.keys()])
+        df = _coerce_object_numeric_columns(df, [index_col, *table.fkey_col_to_pkey_table.keys()])
         dataframes[name] = df
         specs[name] = TableSpec(index=index_col, time_col=table.time_col, fkeys=dict(table.fkey_col_to_pkey_table))
 
@@ -340,6 +383,8 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             df = _ensure_index_column(df, spec.index)
             df = _coerce_time_column(df, spec.time_col)
             df = _coerce_foreign_keys(df, spec.fkeys.keys())
+            df = _coerce_nullable_numeric_features(df, [spec.index, *spec.fkeys.keys()])
+            df = _coerce_object_numeric_columns(df, [spec.index, *spec.fkeys.keys()])
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
                 add_kwargs["time_index"] = spec.time_col
