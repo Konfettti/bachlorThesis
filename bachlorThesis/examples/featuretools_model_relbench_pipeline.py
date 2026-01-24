@@ -337,6 +337,18 @@ def _coerce_foreign_keys(df: pd.DataFrame, fkeys: Iterable[str]) -> pd.DataFrame
     return df
 
 
+def _coerce_nullable_int_features(df: pd.DataFrame, exclude_cols: Iterable[str]) -> pd.DataFrame:
+    df = df.copy()
+    exclude_set = set(exclude_cols)
+    for column in df.columns:
+        if column in exclude_set:
+            continue
+        dtype = df[column].dtype
+        if is_integer_dtype(dtype) and is_extension_array_dtype(dtype):
+            df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
+    return df
+
+
 def _coerce_array_like_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     for column in df.columns:
@@ -422,6 +434,7 @@ def prepare_base_tables(dataset, max_rows: Optional[int]) -> Tuple[Dict[str, pd.
         df = _ensure_index_column(df, index_col)
         df = _coerce_time_column(df, table.time_col)
         df = _coerce_foreign_keys(df, table.fkey_col_to_pkey_table.keys())
+        df = _coerce_nullable_int_features(df, [index_col, *table.fkey_col_to_pkey_table.keys()])
         dataframes[name] = df
         specs[name] = TableSpec(index=index_col, time_col=table.time_col, fkeys=dict(table.fkey_col_to_pkey_table))
 
@@ -475,6 +488,7 @@ def build_entityset_builder(specs: Mapping[str, TableSpec]) -> Callable[[Mapping
             df = _ensure_index_column(df, spec.index)
             df = _coerce_time_column(df, spec.time_col)
             df = _coerce_foreign_keys(df, spec.fkeys.keys())
+            df = _coerce_nullable_int_features(df, [spec.index, *spec.fkeys.keys()])
             df = _coerce_array_like_columns(df)
             add_kwargs = dict(dataframe_name=name, dataframe=df, index=spec.index)
             if spec.time_col and spec.time_col in df.columns:
