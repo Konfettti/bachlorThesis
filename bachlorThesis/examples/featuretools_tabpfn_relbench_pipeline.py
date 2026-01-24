@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import warnings
 from dataclasses import dataclass
+from numbers import Number
 import json
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 

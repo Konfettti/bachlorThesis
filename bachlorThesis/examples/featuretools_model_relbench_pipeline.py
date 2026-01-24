@@ -82,6 +82,7 @@ import sys
 import types
 import warnings
 from dataclasses import dataclass
+from numbers import Number
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from time import perf_counter
