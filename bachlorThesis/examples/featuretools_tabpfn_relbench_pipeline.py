@@ -68,7 +68,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_extension_array_dtype, is_integer_dtype
+from pandas.api.types import is_extension_array_dtype, is_integer_dtype, is_numeric_dtype
 
 import featuretools as ft
 from sklearn.metrics import (
